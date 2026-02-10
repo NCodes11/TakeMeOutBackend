@@ -1,0 +1,11 @@
+{
+  "screens": [
+    { "name": "Home", "width": 390, "height": 844, "elements": ["Header", "Input/Default", "Button/Primary"] },
+    { "name": "Plan Wizard", "width": 390, "height": 844, "elements": ["Header", "Card/Base", "Button/Primary"] },
+    { "name": "Generated Plan", "width": 390, "height": 844, "elements": ["Header", "StopCard", "StopCard"] },
+    { "name": "Plan Detail", "width": 390, "height": 844, "elements": ["Header", "Card/Base"] },
+    { "name": "Today Mode", "width": 390, "height": 844, "elements": ["Header", "Card/Base", "Button/Primary"] },
+    { "name": "Saved Plans", "width": 390, "height": 844, "elements": ["Header", "Card/Base"] },
+    { "name": "Settings", "width": 390, "height": 844, "elements": ["Header", "Card/Base"] }
+  ]
+}

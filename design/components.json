@@ -1,0 +1,9 @@
+{
+  "components": [
+    { "name": "Button/Primary", "type": "button", "width": 160, "height": 44, "text": "Generate" },
+    { "name": "Card/Base", "type": "card", "width": 343, "height": 120 },
+    { "name": "Input/Default", "type": "input", "width": 343, "height": 48, "placeholder": "City" },
+    { "name": "StopCard", "type": "stop-card", "width": 343, "height": 150 },
+    { "name": "Header", "type": "header", "width": 343, "height": 56, "text": "DayDate" }
+  ]
+}
