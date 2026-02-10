@@ -1,0 +1,96 @@
+export type GroupType = 'Date' | 'Family' | 'Friends';
+export type TransportType = 'walk' | 'drive';
+export type PaceType = 'relaxed' | 'balanced' | 'packed';
+export type BudgetType = '$' | '$$' | '$$$';
+
+export interface PlanPreferences {
+  interests: string[];
+  avoid: string[];
+  mustInclude: string;
+  maxTravelMinutes: number;
+  kidFriendly: boolean;
+  accessibleFriendly: boolean;
+}
+
+export interface Plan {
+  id: string;
+  title: string;
+  city: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  groupType: GroupType;
+  transport: TransportType;
+  pace: PaceType;
+  budget: BudgetType;
+  preferencesJSON: string;
+  createdAt: string;
+  returnToStart: boolean;
+}
+
+export interface Stop {
+  id: string;
+  planId: string;
+  order: number;
+  name: string;
+  category: string;
+  lat: number;
+  lng: number;
+  address: string;
+  startTime: string;
+  endTime: string;
+  durationMin: number;
+  costLevel: string;
+  why: string;
+  locked: number;
+  openNow?: boolean;
+  distanceKm?: number;
+  etaMin?: number;
+}
+
+export interface ChecklistItem {
+  id: string;
+  planId: string;
+  text: string;
+  done: number;
+}
+
+export interface CachedPlace {
+  providerKey: string;
+  name: string;
+  lat: number;
+  lng: number;
+  category: string;
+  rawJSON: string;
+  cachedAt: string;
+}
+
+export interface PlaceCandidate {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  category: string;
+  address: string;
+  costLevel?: string;
+  openNow?: boolean;
+  tags: string[];
+}
+
+export interface WizardInput {
+  city: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  groupType: GroupType;
+  adults: number;
+  kids: number;
+  kidAges: number[];
+  transport: TransportType;
+  pace: PaceType;
+  budget: BudgetType;
+  preferences: PlanPreferences;
+  startLocationMode: 'my-location' | 'custom';
+  startAddress: string;
+  returnToStart: boolean;
+}

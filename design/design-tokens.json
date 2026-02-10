@@ -1,0 +1,19 @@
+{
+  "colors": {
+    "background": "#F8FAFC",
+    "surface": "#FFFFFF",
+    "textPrimary": "#111827",
+    "textSecondary": "#6B7280",
+    "primary": "#4F46E5",
+    "accent": "#0EA5E9",
+    "success": "#10B981"
+  },
+  "typography": {
+    "title": { "fontSize": 28, "fontWeight": 700 },
+    "heading": { "fontSize": 20, "fontWeight": 600 },
+    "body": { "fontSize": 16, "fontWeight": 400 },
+    "caption": { "fontSize": 13, "fontWeight": 400 }
+  },
+  "spacing": { "xs": 4, "sm": 8, "md": 16, "lg": 24, "xl": 32 },
+  "radius": { "card": 14, "button": 12, "input": 10 }
+}
