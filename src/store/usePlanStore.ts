@@ -4,13 +4,14 @@ import { NominatimOverpassProvider } from '@/providers/placesProvider';
 import { OsrmProvider } from '@/providers/routingProvider';
 import { generateStops } from '@/services/generator';
 import { Plan, Stop, WizardInput } from '@/types/models';
-import { v4 as uuid } from 'uuid';
+import * as Crypto from 'expo-crypto';
 
 interface PlanState {
   plans: Plan[];
   stopsByPlan: Record<string, Stop[]>;
   loading: boolean;
   error?: string;
+  warning?: string;
   boot: () => void;
   loadPlans: () => void;
   createPlan: (input: WizardInput) => Promise<string>;
@@ -23,6 +24,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   plans: [],
   stopsByPlan: {},
   loading: false,
+  warning: undefined,
   boot: () => {
     initDb();
     get().loadPlans();
@@ -34,13 +36,16 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     set({ plans, stopsByPlan });
   },
   createPlan: async (input) => {
-    set({ loading: true, error: undefined });
+    set({ loading: true, error: undefined, warning: undefined });
     try {
       const provider = new NominatimOverpassProvider();
       const routing = new OsrmProvider();
-      const planId = uuid();
-      const candidates = await provider.search(input.city, input.preferences.interests);
-      const stops = await generateStops(planId, input, candidates, routing);
+      const origin = input.startLat != null && input.startLng != null ? { lat: input.startLat, lng: input.startLng } : undefined;
+      console.log('[plan] create_start', { city: input.city, origin, interests: input.preferences.interests, stopCount: input.stopCount });
+      const planId = Crypto.randomUUID();
+      const { places, warnings } = await provider.search(input.city, input.preferences.interests, origin, input.stopCount);
+      console.log('[plan] candidates_loaded', { count: places.length, city: input.city });
+      const stops = await generateStops(planId, input, places, routing);
       const plan: Plan = {
         id: planId,
         title: `${input.city} ${input.groupType} Day`,
@@ -58,9 +63,13 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       };
       savePlan(plan, stops);
       get().loadPlans();
+      if (warnings.length > 0 || stops.length < input.stopCount) {
+        set({ warning: warnings[0] || 'Not enough places found nearby.' });
+      }
       return planId;
     } catch (e) {
-      set({ error: 'Unable to create plan. Please try again.' });
+      const message = e instanceof Error ? e.message : 'Unable to create plan. Please try again.';
+      set({ error: message });
       throw e;
     } finally {
       set({ loading: false });
@@ -86,11 +95,15 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const routing = new OsrmProvider();
     const existing = get().stopsByPlan[planId] || [];
     const locked = existing.filter((s) => s.locked === 1);
-    const candidates = await provider.search(input.city, input.preferences.interests);
-    let stops = await generateStops(planId, input, candidates, routing);
+    const origin = input.startLat != null && input.startLng != null ? { lat: input.startLat, lng: input.startLng } : undefined;
+    const { places, warnings } = await provider.search(input.city, input.preferences.interests, origin, input.stopCount);
+    let stops = await generateStops(planId, input, places, routing);
     stops = stops.map((s) => locked.find((l) => l.order === s.order) || s);
     const plan = get().plans.find((p) => p.id === planId);
     if (plan) savePlan(plan, stops);
+    if (warnings.length > 0 || stops.length < input.stopCount) {
+      set({ warning: warnings[0] || 'Not enough places found nearby.' });
+    }
     get().loadPlans();
   },
 }));

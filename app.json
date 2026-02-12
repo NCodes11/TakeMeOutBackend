@@ -1,14 +1,15 @@
 {
   "expo": {
-    "name": "DayDate",
-    "slug": "daydate",
-    "scheme": "daydate",
+    "name": "Take Me Out",
+    "slug": "take-me-out",
+    "scheme": "takemeout",
     "version": "1.0.0",
     "orientation": "portrait",
     "plugins": [
       "expo-router",
       "expo-location",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-asset"
     ],
     "ios": {
       "supportsTablet": true,

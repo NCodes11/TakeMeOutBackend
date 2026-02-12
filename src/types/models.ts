@@ -2,6 +2,7 @@ export type GroupType = 'Date' | 'Family' | 'Friends';
 export type TransportType = 'walk' | 'drive';
 export type PaceType = 'relaxed' | 'balanced' | 'packed';
 export type BudgetType = '$' | '$$' | '$$$';
+export type StopType = 'coffee' | 'restaurant' | 'bar' | 'dessert' | 'activity' | 'outdoors' | 'shopping' | 'arts';
 
 export interface PlanPreferences {
   interests: string[];
@@ -46,6 +47,7 @@ export interface Stop {
   openNow?: boolean;
   distanceKm?: number;
   etaMin?: number;
+  stopType?: StopType;
 }
 
 export interface ChecklistItem {
@@ -75,10 +77,14 @@ export interface PlaceCandidate {
   costLevel?: string;
   openNow?: boolean;
   tags: string[];
+  stopType: StopType;
 }
 
 export interface WizardInput {
   city: string;
+  startLat?: number;
+  startLng?: number;
+  stopCount: number;
   date: string;
   startTime: string;
   endTime: string;

@@ -1,15 +1,3 @@
-export const INTERESTS = [
-  'Food',
-  'Coffee/Dessert',
-  'Outdoors',
-  'Museums',
-  'Shopping',
-  'Movies',
-  'Arcade',
-  'Live music',
-  'Scenic views',
-  'Parks',
-  'Kid-friendly',
-  'Rainy-day friendly',
-  'Accessible-friendly',
-];
+import { STOP_TYPE_OPTIONS } from '@/constants/stopTypes';
+
+export const INTERESTS = STOP_TYPE_OPTIONS.map((option) => option.label);

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "expo start",
     "ios": "expo run:ios",
+    "android": "expo run:android",
     "web": "expo start --web",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -14,33 +15,47 @@
     "format": "prettier --write ."
   },
   "dependencies": {
-    "@react-native-async-storage/async-storage": "^1.24.0",
-    "expo": "~52.0.28",
-    "expo-file-system": "~18.0.7",
-    "expo-location": "~18.0.5",
-    "expo-notifications": "~0.29.14",
-    "expo-router": "~4.0.17",
-    "expo-sharing": "~13.0.1",
-    "expo-sqlite": "~15.0.6",
-    "react": "18.3.1",
-    "react-native": "0.76.6",
-    "react-native-maps": "1.18.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+
+    "expo": "^54.0.0",
+    "expo-router": "~6.0.23",
+
+    "expo-asset": "~12.0.5",
+    "expo-crypto": "~14.0.2",
+    "expo-constants": "~18.0.13",
+    "expo-linking": "~8.0.8",
+
+    "expo-file-system": "~19.0.7",
+    "expo-location": "~19.0.5",
+    "expo-notifications": "~0.32.16",
+    "expo-sharing": "~14.0.1",
+    "expo-sqlite": "~16.0.0",
+
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+
+    "react-native-maps": "1.20.1",
     "react-native-paper": "^5.12.5",
     "react-native-qrcode-svg": "^6.3.15",
-    "uuid": "^11.0.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@testing-library/react-native": "^13.0.1",
-    "@types/react": "~18.3.12",
-    "@types/react-native": "^0.73.0",
-    "@types/uuid": "^10.0.0",
+
+    "react-test-renderer": "19.1.0",
+
+    "@types/react": "~19.1.10",
+
     "@typescript-eslint/eslint-plugin": "^8.20.0",
     "@typescript-eslint/parser": "^8.20.0",
+
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^10.0.1",
     "prettier": "^3.4.2",
-    "typescript": "~5.7.2",
+    "typescript": "~5.9.2",
     "vitest": "^2.1.8",
     "babel-plugin-module-resolver": "^5.0.2"
   }

@@ -1,8 +1,31 @@
 import { cachePlaces, getCachedPlaces } from '@/db/sqlite';
-import { PlaceCandidate } from '@/types/models';
+import { PlaceCandidate, StopType } from '@/types/models';
+import { normalizeSelectedStopTypes, STOP_TYPE_OPTIONS } from '@/constants/stopTypes';
+
+interface SearchOrigin {
+  lat: number;
+  lng: number;
+}
+
+interface OverpassElement {
+  id: number | string;
+  lat?: number;
+  lon?: number;
+  tags?: Record<string, string>;
+}
+
+interface NominatimPlace {
+  place_id: number | string;
+  lat: string;
+  lon: string;
+  display_name: string;
+  name?: string;
+  type?: string;
+  class?: string;
+}
 
 export interface PlacesProvider {
-  search(city: string, interests: string[]): Promise<PlaceCandidate[]>;
+  search(city: string, interests: string[], origin?: SearchOrigin, desiredCount?: number): Promise<{ places: PlaceCandidate[]; warnings: string[] }>;
 }
 
 const rateLimiter = { lastMs: 0 };
@@ -13,11 +36,18 @@ const waitIfNeeded = async () => {
 };
 
 export class NominatimOverpassProvider implements PlacesProvider {
-  async search(city: string, interests: string[]): Promise<PlaceCandidate[]> {
-    const cacheKey = `nomi-${city.toLowerCase()}`;
+  async search(city: string, interests: string[], origin?: SearchOrigin, desiredCount = 3): Promise<{ places: PlaceCandidate[]; warnings: string[] }> {
+    const selectedStopTypes = normalizeSelectedStopTypes(interests);
+    const requestedStopTypes: StopType[] = selectedStopTypes.length > 0 ? selectedStopTypes : ['activity', 'outdoors'];
+    const targetCount = Math.max(1, Math.min(6, Math.floor(desiredCount)));
+    const maxResults = Math.max(targetCount * 8, 24);
+    const warnings: string[] = [];
+    const cacheKey = origin
+      ? `nomi-${origin.lat.toFixed(3)}-${origin.lng.toFixed(3)}-${requestedStopTypes.join('-')}`
+      : `nomi-${city.toLowerCase()}-${requestedStopTypes.join('-')}`;
     const cached = getCachedPlaces(cacheKey);
     if (cached.length > 0) {
-      return cached.map((c) => ({
+      const mapped = cached.map((c) => ({
         id: `${c.lat}-${c.lng}-${c.name}`,
         name: c.name,
         lat: c.lat,
@@ -25,39 +55,75 @@ export class NominatimOverpassProvider implements PlacesProvider {
         category: c.category,
         address: c.name,
         tags: [c.category],
+        stopType: this.categoryToStopType(c.category),
       }));
+      const unique = this.dedupePlaces(mapped).slice(0, maxResults);
+      if (unique.length < targetCount) warnings.push('Not enough places found nearby.');
+      return {
+        warnings,
+        places: unique,
+      };
     }
 
     try {
-      await waitIfNeeded();
-      const geocode = await fetch(
-        `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city)}&format=json&limit=1`,
-        { headers: { 'User-Agent': 'DayDate/1.0' } },
-      );
-      const geoJson = (await geocode.json()) as { lat: string; lon: string }[];
-      const center = geoJson[0];
-      if (!center) throw new Error('City not found');
+      let centerLat = origin?.lat;
+      let centerLng = origin?.lng;
 
-      const query = this.buildOverpassQuery(Number(center.lat), Number(center.lon), interests);
+      if (centerLat == null || centerLng == null) {
+        await waitIfNeeded();
+        const geocode = await fetch(
+          `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city)}&format=json&limit=1`,
+          { headers: { 'User-Agent': 'TakeMeOut/1.0' } },
+        );
+        const geoJson = (await geocode.json()) as { lat: string; lon: string }[];
+        const center = geoJson[0];
+        if (!center) return { places: [], warnings: ['Could not resolve this city. Try entering a nearby city.'] };
+        centerLat = Number(center.lat);
+        centerLng = Number(center.lon);
+      }
+
+      const query = this.buildOverpassQuery(centerLat, centerLng, requestedStopTypes);
+      console.log('[places] overpass_query', { city, requestedStopTypes, centerLat, centerLng, stopCount: targetCount, query });
       await waitIfNeeded();
       const overpass = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: query,
       });
-      const overpassJson = (await overpass.json()) as { elements?: any[] };
-      const rows = (overpassJson.elements || []).slice(0, 60).map((el) => ({
-        id: String(el.id),
-        name: el.tags?.name || 'Interesting spot',
-        lat: el.lat,
-        lng: el.lon,
-        category: this.categoryFromTags(el.tags || {}),
-        address: el.tags?.['addr:street'] || city,
-        tags: Object.values(el.tags || {}).map(String),
-      }));
+      const overpassJson = (await overpass.json()) as { elements?: OverpassElement[] };
+      const rows = (overpassJson.elements || [])
+        .filter((el) => typeof el.lat === 'number' && typeof el.lon === 'number' && el.tags?.name)
+        .slice(0, maxResults)
+        .map((el) => {
+          const tags = el.tags || {};
+          return {
+            id: String(el.id),
+            name: String(tags.name),
+            lat: Number(el.lat),
+            lng: Number(el.lon),
+            category: this.categoryFromTags(tags),
+            address: this.addressFromTags(tags, city),
+            tags: Object.values(tags).map(String),
+            costLevel: this.costLevelFromTags(tags),
+            stopType: this.stopTypeFromTags(tags),
+          };
+        });
+
+      const filteredRows = this.filterRowsByStopTypes(rows, requestedStopTypes);
+      const missingTypes = requestedStopTypes.filter((type) => !filteredRows.some((row) => row.stopType === type));
+      if (missingTypes.length > 0) {
+        warnings.push(`Limited results for ${missingTypes.join(', ')}. Added nearby alternatives.`);
+      }
+
+      const mergedRows =
+        filteredRows.length > 0
+          ? filteredRows
+          : await this.searchViaNominatim(city, requestedStopTypes, origin, maxResults, warnings);
+      const uniqueRows = this.dedupePlaces(mergedRows).slice(0, maxResults);
+      if (uniqueRows.length < targetCount) warnings.push('Not enough places found nearby.');
 
       cachePlaces(
-        rows.map((r) => ({
+        uniqueRows.map((r) => ({
           providerKey: cacheKey,
           name: r.name,
           lat: r.lat,
@@ -67,37 +133,33 @@ export class NominatimOverpassProvider implements PlacesProvider {
         })),
       );
 
-      return rows;
+      console.log('[places] results_sample', {
+        requestedStopTypes,
+        count: uniqueRows.length,
+        top: uniqueRows.slice(0, 3).map((row) => ({ name: row.name, stopType: row.stopType, category: row.category })),
+      });
+      return { places: uniqueRows, warnings };
     } catch {
-      return [
-        {
-          id: 'fallback-park',
-          name: `${city} Central Park`,
-          lat: 0,
-          lng: 0,
-          category: 'Parks',
-          address: city,
-          tags: ['Parks', 'Scenic views'],
-        },
-        {
-          id: 'fallback-cafe',
-          name: `${city} Neighborhood Cafe`,
-          lat: 0,
-          lng: 0,
-          category: 'Coffee/Dessert',
-          address: city,
-          tags: ['Coffee/Dessert'],
-        },
-      ];
+      const nomiFallback = await this.searchViaNominatim(city, requestedStopTypes, origin, maxResults, warnings);
+      const uniqueFallback = this.dedupePlaces(nomiFallback).slice(0, maxResults);
+      if (uniqueFallback.length < targetCount) warnings.push('Not enough places found nearby.');
+      return { places: uniqueFallback, warnings };
     }
   }
 
-  private buildOverpassQuery(lat: number, lng: number, interests: string[]) {
-    const keyTags = ['amenity', 'tourism', 'leisure'];
-    const filter = interests.length ? interests.join('|') : 'restaurant|cafe|park|museum';
-    return `[out:json][timeout:25];(node(around:6000,${lat},${lng})[${keyTags
-      .map((t) => `${t}~"${filter}"`)
-      .join('|')}];);out body;`;
+  private buildOverpassQuery(lat: number, lng: number, stopTypes: StopType[]) {
+    const queryKeywords = Array.from(
+      new Set(stopTypes.flatMap((stopType) => STOP_TYPE_OPTIONS.find((option) => option.id === stopType)?.queryKeywords || [])),
+    );
+    const pattern = queryKeywords.join('|');
+    return `[out:json][timeout:25];
+(
+  node(around:6500,${lat},${lng})[name][amenity~"${pattern}",i];
+  node(around:6500,${lat},${lng})[name][tourism~"${pattern}",i];
+  node(around:6500,${lat},${lng})[name][leisure~"${pattern}",i];
+  node(around:6500,${lat},${lng})[name][shop~"${pattern}",i];
+);
+out body 80;`;
   }
 
   private categoryFromTags(tags: Record<string, string>) {
@@ -108,5 +170,156 @@ export class NominatimOverpassProvider implements PlacesProvider {
     if (values.includes('restaurant')) return 'Food';
     if (values.includes('shop')) return 'Shopping';
     return 'Outdoors';
+  }
+
+  private stopTypeFromTags(tags: Record<string, string>): StopType {
+    const values = Object.values(tags).join(' ').toLowerCase();
+    if (/cafe|coffee/.test(values)) return 'coffee';
+    if (/ice_cream|dessert|bakery/.test(values)) return 'dessert';
+    if (/bar|pub|brewery/.test(values)) return 'bar';
+    if (/museum|gallery|theatre|arts/.test(values)) return 'arts';
+    if (/park|trail|viewpoint|garden|nature/.test(values)) return 'outdoors';
+    if (/shop|mall|market|supermarket/.test(values)) return 'shopping';
+    if (/cinema|arcade|bowling|amusement|activity/.test(values)) return 'activity';
+    return 'restaurant';
+  }
+
+  private costLevelFromTags(tags: Record<string, string>) {
+    const value = tags['addr:postcode'] || tags.price_range || '';
+    if (value.includes('$$$')) return '$$$';
+    if (value.includes('$$')) return '$$';
+    return '$$';
+  }
+
+  private addressFromTags(tags: Record<string, string>, city: string) {
+    const house = tags['addr:housenumber'];
+    const street = tags['addr:street'];
+    const locality = tags['addr:city'] || city;
+    if (house && street) return `${house} ${street}, ${locality}`;
+    if (street) return `${street}, ${locality}`;
+    return locality;
+  }
+
+  private async searchViaNominatim(
+    city: string,
+    stopTypes: StopType[],
+    origin?: SearchOrigin,
+    maxResults = 60,
+    warnings?: string[],
+  ): Promise<PlaceCandidate[]> {
+    const keywords = this.fallbackKeywords(stopTypes);
+    const results: PlaceCandidate[] = [];
+    const seen = new Set<string>();
+    const perQueryLimit = Math.min(16, Math.max(8, Math.ceil(maxResults / Math.max(1, keywords.length)) + 2));
+
+    for (const entry of keywords) {
+      await waitIfNeeded();
+      const query = `${entry.keyword} near ${city}`;
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=jsonv2&limit=${perQueryLimit}`;
+      const response = await fetch(url, { headers: { 'User-Agent': 'TakeMeOut/1.0' } });
+      const json = (await response.json()) as NominatimPlace[];
+      for (const row of json) {
+        const lat = Number(row.lat);
+        const lng = Number(row.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        if (origin && this.distanceKm(origin.lat, origin.lng, lat, lng) > 25) continue;
+        const dedupe = `${lat.toFixed(4)}-${lng.toFixed(4)}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        results.push({
+          id: String(row.place_id),
+          name: row.name || this.titleFromDisplayName(row.display_name),
+          lat,
+          lng,
+          category: this.categoryFromTags({ type: row.type || '', class: row.class || '', keyword: entry.keyword }),
+          address: row.display_name,
+          tags: [entry.keyword, row.type || '', row.class || ''].filter(Boolean),
+          costLevel: '$$',
+          stopType: entry.stopType,
+        });
+      }
+    }
+
+    const filtered = this.filterRowsByStopTypes(results, stopTypes);
+    const missingTypes = stopTypes.filter((type) => !filtered.some((row) => row.stopType === type));
+    if (missingTypes.length > 0 && warnings) {
+      warnings.push(`Limited results for ${missingTypes.join(', ')}. Used nearby alternatives.`);
+    }
+
+    return filtered.slice(0, maxResults);
+  }
+
+  private fallbackKeywords(stopTypes: StopType[]) {
+    const entries: Array<{ keyword: string; stopType: StopType }> = [];
+    const selected: StopType[] = stopTypes.length ? stopTypes : ['activity', 'outdoors'];
+    for (const stopType of selected) {
+      const option = STOP_TYPE_OPTIONS.find((item) => item.id === stopType);
+      if (!option) continue;
+      option.queryKeywords.slice(0, 2).forEach((keyword) => entries.push({ keyword, stopType }));
+      option.fallback
+        .flatMap(
+          (fallbackType) =>
+            STOP_TYPE_OPTIONS.find((item) => item.id === fallbackType)?.queryKeywords
+              .slice(0, 1)
+              .map((keyword) => ({ keyword, stopType: fallbackType })) || [],
+        )
+        .forEach((entry) => entries.push(entry));
+    }
+    const seen = new Set<string>();
+    return entries.filter((entry) => {
+      const key = `${entry.stopType}:${entry.keyword}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private titleFromDisplayName(displayName: string) {
+    const first = displayName.split(',')[0]?.trim();
+    return first || 'Interesting spot';
+  }
+
+  private distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const toRad = (v: number) => (v * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 6371 * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  }
+
+  private filterRowsByStopTypes(rows: PlaceCandidate[], requestedStopTypes: StopType[]) {
+    if (requestedStopTypes.length === 0) return rows;
+    const allowed = new Set<StopType>(requestedStopTypes);
+    for (const stopType of requestedStopTypes) {
+      const option = STOP_TYPE_OPTIONS.find((item) => item.id === stopType);
+      option?.fallback.forEach((fallbackType) => allowed.add(fallbackType));
+    }
+    const hasRestaurantRequested = requestedStopTypes.includes('restaurant');
+    return rows.filter((row) => {
+      if (!hasRestaurantRequested && row.stopType === 'restaurant') return false;
+      return allowed.has(row.stopType);
+    });
+  }
+
+  private categoryToStopType(category: string): StopType {
+    const lower = category.toLowerCase();
+    if (lower.includes('coffee')) return 'coffee';
+    if (lower.includes('food')) return 'restaurant';
+    if (lower.includes('shop')) return 'shopping';
+    if (lower.includes('museum')) return 'arts';
+    if (lower.includes('park') || lower.includes('outdoors')) return 'outdoors';
+    return 'activity';
+  }
+
+  private dedupePlaces(rows: PlaceCandidate[]): PlaceCandidate[] {
+    const seen = new Set<string>();
+    return rows.filter((row) => {
+      const key = `${row.name.toLowerCase()}-${row.lat.toFixed(4)}-${row.lng.toFixed(4)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 }

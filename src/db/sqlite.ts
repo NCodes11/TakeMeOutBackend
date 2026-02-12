@@ -3,6 +3,26 @@ import { ChecklistItem, Plan, Stop } from '@/types/models';
 
 const db = SQLite.openDatabaseSync('daydate.db');
 
+const coerceBoolean = (value: unknown): boolean => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1') return true;
+    if (normalized === 'false' || normalized === '0') return false;
+  }
+  return false;
+};
+
+const coerceNumber = (value: unknown, fallback = 0): number => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+};
+
 export const initDb = () => {
   db.execSync(`
     CREATE TABLE IF NOT EXISTS Plan (
@@ -101,10 +121,21 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
   });
 };
 
-export const getPlans = (): Plan[] => db.getAllSync<Plan>('SELECT * FROM Plan ORDER BY createdAt DESC');
+export const getPlans = (): Plan[] =>
+  db
+    .getAllSync<Omit<Plan, 'returnToStart'> & { returnToStart: unknown }>('SELECT * FROM Plan ORDER BY createdAt DESC')
+    .map((plan) => ({
+      ...plan,
+      returnToStart: coerceBoolean(plan.returnToStart),
+    }));
 
 export const getPlanStops = (planId: string): Stop[] =>
-  db.getAllSync<Stop>('SELECT * FROM Stop WHERE planId = ? ORDER BY "order" ASC', [planId]);
+  db
+    .getAllSync<Omit<Stop, 'locked'> & { locked: unknown }>('SELECT * FROM Stop WHERE planId = ? ORDER BY "order" ASC', [planId])
+    .map((stop) => ({
+      ...stop,
+      locked: coerceNumber(stop.locked),
+    }));
 
 export const saveChecklist = (items: ChecklistItem[]) => {
   db.withTransactionSync(() => {
