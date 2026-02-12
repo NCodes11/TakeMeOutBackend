@@ -1,6 +1,6 @@
-# DayDate (Expo + TypeScript)
+# TakeMeOut (Expo + TypeScript)
 
-DayDate is an iPhone-ready itinerary planner for dates/family/friends with local-first persistence.
+Take Me Out is an iPhone-ready itinerary planner for dates/family/friends with local-first persistence.
 
 ## Features
 - Expo React Native + expo-router + React Native Paper
