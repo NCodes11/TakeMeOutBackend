@@ -167,6 +167,8 @@ export const generateStops = async (
       etaMin: travel,
       distanceKm: distance,
       stopType: s.stopType,
+      providerId: s.providerId,
+      reviewCount: s.reviewCount,
     };
   });
 };

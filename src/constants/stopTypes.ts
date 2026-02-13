@@ -13,7 +13,7 @@ export const STOP_TYPE_OPTIONS: StopTypeOption[] = [
   { id: 'bar', label: 'Bars', queryKeywords: ['bar', 'pub', 'brewery'], fallback: ['restaurant', 'arts'] },
   { id: 'dessert', label: 'Dessert', queryKeywords: ['ice_cream', 'bakery', 'dessert'], fallback: ['coffee'] },
   { id: 'activity', label: 'Activities', queryKeywords: ['bowling_alley', 'cinema', 'arcade'], fallback: ['arts', 'outdoors'] },
-  { id: 'attraction', label: 'Attractions', queryKeywords: ['tourist_attraction', 'theme_park', 'amusement_park'], fallback: ['activity', 'outdoors'] },
+  { id: 'attraction', label: 'Major Attractions', queryKeywords: ['tourist_attraction', 'theme_park', 'amusement_park'], fallback: ['activity', 'outdoors'] },
   { id: 'outdoors', label: 'Outdoors', queryKeywords: ['park', 'garden', 'viewpoint', 'trail'], fallback: ['activity'] },
   { id: 'shopping', label: 'Shopping', queryKeywords: ['mall', 'supermarket', 'gift_shop'], fallback: ['arts', 'coffee'] },
   { id: 'arts', label: 'Arts & Culture', queryKeywords: ['museum', 'gallery', 'theatre'], fallback: ['activity'] },

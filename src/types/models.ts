@@ -49,6 +49,8 @@ export interface Stop {
   distanceKm?: number;
   etaMin?: number;
   stopType?: StopType;
+  providerId?: string;
+  reviewCount?: number;
 }
 
 export interface ChecklistItem {
@@ -70,6 +72,7 @@ export interface CachedPlace {
 
 export interface PlaceCandidate {
   id: string;
+  providerId?: string;
   name: string;
   lat: number;
   lng: number;
@@ -78,6 +81,7 @@ export interface PlaceCandidate {
   costLevel?: string;
   openNow?: boolean;
   rating?: number;
+  reviewCount?: number;
   openingHoursText?: string;
   priceLevel?: number;
   tags: string[];

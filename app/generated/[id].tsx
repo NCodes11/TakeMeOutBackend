@@ -4,7 +4,7 @@ import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components
 import { usePlanStore } from '@/store/usePlanStore';
 import { exportIcs, planCode, shareJson } from '@/utils/share';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Linking, StyleSheet, View } from 'react-native';
+import { Alert, Linking, StyleSheet, View } from 'react-native';
 import { Card, SegmentedButtons, Text } from 'react-native-paper';
 import QRCode from 'react-native-qrcode-svg';
 import { useState } from 'react';
@@ -51,15 +51,20 @@ export default function GeneratedPlanScreen() {
               key={s.id}
               stop={s}
               onLock={() => lockStop(id, s.id, s.locked !== 1)}
-              onOpenMap={
-                hasValidCoords({ lat: s.lat, lng: s.lng })
-                  ? async () => {
-                      const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
-                      console.log('[maps] open_stop_pin', { stop: s.name, destination: { lat: s.lat, lng: s.lng }, url });
-                      await Linking.openURL(url);
-                    }
-                  : undefined
-              }
+              onOpenMap={async () => {
+                if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
+                  Alert.alert('Missing location data', 'This stop is missing coordinates. Regenerate your plan to refresh place details.');
+                  return;
+                }
+                const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
+                console.log('[maps] open_stop_pin', {
+                  stop: s.name,
+                  providerId: s.providerId,
+                  destination: { lat: s.lat, lng: s.lng },
+                  url,
+                });
+                await Linking.openURL(url);
+              }}
             />
           ))
         : orderedStops.map((s, index) => (
@@ -68,7 +73,10 @@ export default function GeneratedPlanScreen() {
               <Card.Actions>
                 <SecondaryButton
                   onPress={async () => {
-                    if (!hasValidCoords({ lat: s.lat, lng: s.lng })) return;
+                    if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
+                      Alert.alert('Missing location data', 'This stop is missing coordinates. Regenerate your plan to refresh place details.');
+                      return;
+                    }
                     const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
                     await Linking.openURL(url);
                   }}

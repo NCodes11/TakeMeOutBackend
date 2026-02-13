@@ -31,6 +31,7 @@ interface GoogleNearbyPlace {
   vicinity?: string;
   formatted_address?: string;
   rating?: number;
+  user_ratings_total?: number;
   price_level?: number;
   opening_hours?: {
     open_now?: boolean;
@@ -42,6 +43,17 @@ interface GoogleNearbyPlace {
     };
   };
   types?: string[];
+}
+
+interface GooglePlaceDetailsResponse {
+  result?: {
+    geometry?: {
+      location?: {
+        lat?: number;
+        lng?: number;
+      };
+    };
+  };
 }
 
 export interface PlacesSearchOptions {
@@ -62,24 +74,25 @@ export interface PlacesProvider {
 const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
 const MAX_RADIUS_METERS = 60000;
 const rateLimiter = { lastMs: 0 };
+const MAJOR_ATTRACTION_SEEDS = [
+  'Walt Disney World',
+  'Magic Kingdom',
+  'EPCOT',
+  'Hollywood Studios',
+  'Animal Kingdom',
+  'Universal Orlando',
+  'Islands of Adventure',
+  'SeaWorld Orlando',
+  'Disney Springs',
+  'ICON Park',
+  'Kennedy Space Center',
+];
 
 const waitIfNeeded = async () => {
   const gap = 1100 - (Date.now() - rateLimiter.lastMs);
   if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
   rateLimiter.lastMs = Date.now();
 };
-
-const stopTypesToKeywords = (): Record<StopType, { type?: string; keyword?: string }> => ({
-  coffee: { type: 'cafe', keyword: 'coffee shop' },
-  restaurant: { type: 'restaurant', keyword: 'restaurant' },
-  bar: { type: 'bar', keyword: 'bar pub' },
-  dessert: { type: 'bakery', keyword: 'dessert ice cream' },
-  activity: { type: 'tourist_attraction', keyword: 'activities' },
-  attraction: { type: 'tourist_attraction', keyword: 'theme park attraction' },
-  outdoors: { type: 'park', keyword: 'park trail nature preserve' },
-  shopping: { type: 'shopping_mall', keyword: 'shopping store mall' },
-  arts: { type: 'museum', keyword: 'museum gallery' },
-});
 
 const toRadians = (value: number) => (value * Math.PI) / 180;
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -96,6 +109,10 @@ const buildRadiusSteps = (options?: PlacesSearchOptions) => {
   const steps = [baseMeters, 20000, 40000, 60000];
   return Array.from(new Set(steps.filter((value) => value <= MAX_RADIUS_METERS))).sort((a, b) => a - b);
 };
+
+const ATTRACTION_RADIUS_STEPS = [15000, 30000, 60000, 80000];
+
+const MAJOR_ATTRACTION_BRAND_TERMS = ['disney', 'universal', 'seaworld', 'icon park', 'kennedy space center', 'legoland'];
 
 const toCostLevel = (priceLevel?: number): string => {
   if (typeof priceLevel !== 'number') return 'Unknown';
@@ -126,6 +143,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
     if (cached.length > 0) {
       const mapped = cached.map((row) => ({
         id: `${row.lat}-${row.lng}-${row.name}`,
+        providerId: `${row.lat}-${row.lng}-${row.name}`,
         name: row.name,
         lat: row.lat,
         lng: row.lng,
@@ -140,7 +158,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
     }
 
     if (googleApiKey && origin) {
-      const googleRows = await this.searchViaGoogle(requestedStopTypes, origin, maxResults, googleApiKey, options);
+      const googleRows = await this.searchViaGoogle(requestedStopTypes, city, origin, maxResults, googleApiKey, options);
       const strictGoogleRows = this.filterRowsByStopTypes(googleRows, requestedStopTypes);
       const uniqueGoogleRows = this.dedupePlaces(strictGoogleRows).slice(0, maxResults);
       if (uniqueGoogleRows.length >= targetCount) {
@@ -157,17 +175,23 @@ export class NominatimOverpassProvider implements PlacesProvider {
 
   private async searchViaGoogle(
     stopTypes: StopType[],
+    city: string,
     origin: SearchOrigin,
     maxResults: number,
     apiKey: string,
     options?: PlacesSearchOptions,
   ): Promise<PlaceCandidate[]> {
-    const mapping = stopTypesToKeywords();
     const radiusSteps = buildRadiusSteps(options);
     const perTypeLimit = Math.max(8, Math.min(20, Math.ceil(maxResults / Math.max(1, stopTypes.length)) + 4));
     const results: PlaceCandidate[] = [];
 
     for (const stopType of stopTypes) {
+      if (stopType === 'attraction') {
+        const attractionRows = await this.searchGoogleAttractions(origin, city, perTypeLimit, apiKey, options);
+        results.push(...attractionRows);
+        continue;
+      }
+
       const policy = CATEGORY_POLICIES[stopType];
       const merged = new Map<string, GoogleNearbyPlace>();
       let usedRadius = radiusSteps[0];
@@ -175,13 +199,12 @@ export class NominatimOverpassProvider implements PlacesProvider {
 
       for (const radius of radiusSteps) {
         usedRadius = radius;
-        const nearbyTypes = policy.nearbyTypes.length ? policy.nearbyTypes : [mapping[stopType].type || 'point_of_interest'];
+        const nearbyTypes = policy.nearbyTypes.length ? policy.nearbyTypes : ['point_of_interest'];
         for (const nearbyType of nearbyTypes) {
           const nearbyUrl = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
           nearbyUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
           nearbyUrl.searchParams.set('radius', String(radius));
           nearbyUrl.searchParams.set('type', nearbyType);
-          if (mapping[stopType].keyword) nearbyUrl.searchParams.set('keyword', mapping[stopType].keyword as string);
           nearbyUrl.searchParams.set('key', apiKey);
           const nearbyRows = await this.fetchGooglePlaces(nearbyUrl.toString(), perTypeLimit);
           rawCandidates += nearbyRows.length;
@@ -211,11 +234,21 @@ export class NominatimOverpassProvider implements PlacesProvider {
       }
 
       const acceptedRows: PlaceCandidate[] = [];
-      const debugRows: Array<{ name: string; accepted: boolean; score: number; reasons: string[]; distanceKm: number; types: string[] }> = [];
+      const debugRows: Array<{
+        name: string;
+        accepted: boolean;
+        score: number;
+        reasons: string[];
+        distanceKm: number;
+        types: string[];
+        rating?: number;
+        reviewCount?: number;
+      }> = [];
 
       for (const row of merged.values()) {
-        const lat = row.geometry?.location?.lat;
-        const lng = row.geometry?.location?.lng;
+        const geometry = await this.resolveGoogleGeometry(row, apiKey);
+        const lat = geometry?.lat;
+        const lng = geometry?.lng;
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
         const name = (row.name || '').trim();
         if (!name) continue;
@@ -235,11 +268,14 @@ export class NominatimOverpassProvider implements PlacesProvider {
           reasons: evaluation.reasons,
           distanceKm,
           types: row.types || [],
+          rating: row.rating,
+          reviewCount: row.user_ratings_total,
         });
 
         if (!evaluation.accepted) continue;
         acceptedRows.push({
           id: row.place_id || `${name}-${lat}-${lng}`,
+          providerId: row.place_id,
           name,
           lat: Number(lat),
           lng: Number(lng),
@@ -250,6 +286,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
           stopType,
           openNow: row.opening_hours?.open_now,
           rating: row.rating,
+          reviewCount: row.user_ratings_total,
           priceLevel: row.price_level,
           openingHoursText:
             typeof row.opening_hours?.open_now === 'boolean'
@@ -263,7 +300,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
       if (isDev) {
         const topDebug = debugRows
           .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
-          .slice(0, 5)
+          .slice(0, 10)
           .map((row) => ({
             name: row.name,
             accepted: row.accepted,
@@ -271,6 +308,8 @@ export class NominatimOverpassProvider implements PlacesProvider {
             reasons: row.reasons,
             distanceKm: Math.round(row.distanceKm * 10) / 10,
             types: row.types,
+            rating: row.rating,
+            reviewCount: row.reviewCount,
           }));
         console.log('[places][debug]', {
           stopType,
@@ -297,6 +336,270 @@ export class NominatimOverpassProvider implements PlacesProvider {
     } catch {
       return [];
     }
+  }
+
+  private async fetchGooglePlaceDetails(placeId: string, apiKey: string): Promise<GooglePlaceDetailsResponse['result'] | null> {
+    try {
+      const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
+      url.searchParams.set('place_id', placeId);
+      url.searchParams.set('fields', 'geometry');
+      url.searchParams.set('key', apiKey);
+      const response = await fetch(url.toString());
+      const json = (await response.json()) as GooglePlaceDetailsResponse;
+      return json.result || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveGoogleGeometry(row: GoogleNearbyPlace, apiKey: string): Promise<{ lat: number; lng: number } | null> {
+    const lat = row.geometry?.location?.lat;
+    const lng = row.geometry?.location?.lng;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      return { lat: Number(lat), lng: Number(lng) };
+    }
+    if (!row.place_id) return null;
+    const details = await this.fetchGooglePlaceDetails(row.place_id, apiKey);
+    const detailLat = details?.geometry?.location?.lat;
+    const detailLng = details?.geometry?.location?.lng;
+    if (!Number.isFinite(detailLat) || !Number.isFinite(detailLng)) return null;
+    return { lat: Number(detailLat), lng: Number(detailLng) };
+  }
+
+  private attractionScore(input: {
+    row: GoogleNearbyPlace;
+    distanceKm: number;
+    evaluationScore: number;
+  }) {
+    const rating = Math.max(0, Math.min(5, input.row.rating || 0));
+    const reviewCount = Math.max(0, input.row.user_ratings_total || 0);
+    const normalizedRating = rating / 5;
+    const normalizedDistance = Math.max(0, Math.min(1, input.distanceKm / 80));
+    const reviewSignal = Math.log10(reviewCount + 1);
+    const lowerName = (input.row.name || '').toLowerCase();
+    const brandBoost = MAJOR_ATTRACTION_BRAND_TERMS.some((term) => lowerName.includes(term)) ? 0.6 : 0;
+    return input.evaluationScore + normalizedRating * 4 + reviewSignal * 1.2 - normalizedDistance * 1.8 + brandBoost;
+  }
+
+  private async searchGoogleAttractions(
+    origin: SearchOrigin,
+    city: string,
+    perTypeLimit: number,
+    apiKey: string,
+    options?: PlacesSearchOptions,
+  ): Promise<PlaceCandidate[]> {
+    const policy = CATEGORY_POLICIES.attraction;
+    const merged = new Map<string, GoogleNearbyPlace>();
+    const topDebug: Array<{
+      name: string;
+      accepted: boolean;
+      reasons: string[];
+      score: number;
+      rating?: number;
+      reviewCount?: number;
+      distanceKm: number;
+      radius: number;
+      pass: 'A' | 'B';
+      types: string[];
+    }> = [];
+    let rawCandidates = 0;
+    let filteredCandidates = 0;
+    let selectedRadius = ATTRACTION_RADIUS_STEPS[0];
+
+    const requestedMin = Math.max(20, perTypeLimit);
+    const radiusSteps = options ? Array.from(new Set([...ATTRACTION_RADIUS_STEPS])) : ATTRACTION_RADIUS_STEPS;
+    const passAQueries = policy.queryTerms;
+    const passBQueries = MAJOR_ATTRACTION_SEEDS;
+
+    for (const radius of radiusSteps) {
+      selectedRadius = radius;
+      const rawBefore = rawCandidates;
+      for (const nearbyType of policy.nearbyTypes) {
+        const nearbyUrl = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
+        nearbyUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+        nearbyUrl.searchParams.set('radius', String(radius));
+        nearbyUrl.searchParams.set('type', nearbyType);
+        nearbyUrl.searchParams.set('key', apiKey);
+        const nearbyRows = await this.fetchGooglePlaces(nearbyUrl.toString(), requestedMin);
+        rawCandidates += nearbyRows.length;
+        nearbyRows.forEach((row) => merged.set(row.place_id, row));
+      }
+
+      for (const query of passAQueries) {
+        const textUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
+        textUrl.searchParams.set('query', `${query} in ${city}`);
+        textUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+        textUrl.searchParams.set('radius', String(radius));
+        textUrl.searchParams.set('key', apiKey);
+        const textRows = await this.fetchGooglePlaces(textUrl.toString(), requestedMin);
+        rawCandidates += textRows.length;
+        textRows.forEach((row) => merged.set(row.place_id, row));
+      }
+
+      const passAFiltered = await this.filterAttractionCandidates(merged, origin, radius, apiKey, topDebug, 'A');
+      filteredCandidates = passAFiltered.length;
+      if (isDev) {
+        console.log('[places][debug][attraction][passA]', {
+          center: origin,
+          radius,
+          queryTerms: passAQueries,
+          rawCandidates: rawCandidates - rawBefore,
+          filteredCandidates,
+        });
+      }
+      if (filteredCandidates >= requestedMin) {
+        if (isDev) {
+          console.log('[places][debug][attraction][selected]', {
+            center: origin,
+            radiusUsed: radius,
+            pass: 'A',
+            rawCandidates,
+            filteredCandidates,
+            topCandidates: topDebug
+              .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
+              .slice(0, 10),
+          });
+        }
+        return passAFiltered.slice(0, perTypeLimit);
+      }
+
+      const rawBeforeSeeds = rawCandidates;
+      for (const seed of passBQueries) {
+        const seedUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
+        seedUrl.searchParams.set('query', `${seed} in ${city}`);
+        seedUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+        seedUrl.searchParams.set('radius', String(radius));
+        seedUrl.searchParams.set('key', apiKey);
+        const seedRows = await this.fetchGooglePlaces(seedUrl.toString(), requestedMin);
+        rawCandidates += seedRows.length;
+        seedRows.forEach((row) => merged.set(row.place_id, row));
+      }
+
+      const passABFiltered = await this.filterAttractionCandidates(merged, origin, radius, apiKey, topDebug, 'B');
+      filteredCandidates = passABFiltered.length;
+      if (isDev) {
+        console.log('[places][debug][attraction][passB]', {
+          center: origin,
+          radius,
+          queryTerms: passBQueries,
+          rawCandidates: rawCandidates - rawBeforeSeeds,
+          filteredCandidates,
+        });
+      }
+      if (filteredCandidates >= requestedMin) {
+        if (isDev) {
+          console.log('[places][debug][attraction][selected]', {
+            center: origin,
+            radiusUsed: radius,
+            pass: 'B',
+            rawCandidates,
+            filteredCandidates,
+            topCandidates: topDebug
+              .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
+              .slice(0, 10),
+          });
+        }
+        return passABFiltered.slice(0, perTypeLimit);
+      }
+    }
+
+    const fallbackRows = await this.filterAttractionCandidates(merged, origin, selectedRadius, apiKey, topDebug, 'B');
+    if (isDev) {
+      console.log('[places][debug][attraction]', {
+        stopType: 'attraction',
+        center: origin,
+        radiusUsed: selectedRadius,
+        passAQueries,
+        passBQueries,
+        rawCandidates,
+        filteredCandidates: fallbackRows.length,
+        topCandidates: topDebug
+          .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
+          .slice(0, 10),
+      });
+    }
+    return fallbackRows.slice(0, perTypeLimit);
+  }
+
+  private async filterAttractionCandidates(
+    merged: Map<string, GoogleNearbyPlace>,
+    origin: SearchOrigin,
+    radius: number,
+    apiKey: string,
+    debugRows: Array<{
+      name: string;
+      accepted: boolean;
+      reasons: string[];
+      score: number;
+      rating?: number;
+      reviewCount?: number;
+      distanceKm: number;
+      radius: number;
+      pass: 'A' | 'B';
+      types: string[];
+    }>,
+    pass: 'A' | 'B',
+  ) {
+    const acceptedRows: Array<{ candidate: PlaceCandidate; score: number }> = [];
+    for (const row of merged.values()) {
+      const geometry = await this.resolveGoogleGeometry(row, apiKey);
+      const lat = geometry?.lat;
+      const lng = geometry?.lng;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const name = (row.name || '').trim();
+      if (!name) continue;
+      const distanceKm = haversineKm(origin.lat, origin.lng, Number(lat), Number(lng));
+      if (distanceKm * 1000 > radius) continue;
+
+      const evaluation = evaluateCategoryCandidate('attraction', {
+        name,
+        address: row.vicinity || row.formatted_address || '',
+        types: row.types || [],
+      });
+      const score = this.attractionScore({ row, distanceKm, evaluationScore: evaluation.score });
+      const accepted = evaluation.accepted;
+      debugRows.push({
+        name,
+        accepted,
+        reasons: evaluation.reasons,
+        score,
+        rating: row.rating,
+        reviewCount: row.user_ratings_total,
+        distanceKm,
+        radius,
+        pass,
+        types: row.types || [],
+      });
+      if (!accepted) continue;
+      acceptedRows.push({
+        score,
+        candidate: {
+          id: row.place_id || `${name}-${lat}-${lng}`,
+          providerId: row.place_id,
+          name,
+          lat: Number(lat),
+          lng: Number(lng),
+          category: this.categoryFromGoogleTypes(row.types || [], 'attraction'),
+          address: row.vicinity || row.formatted_address || 'Address unavailable',
+          tags: row.types || ['attraction'],
+          costLevel: toCostLevel(row.price_level),
+          stopType: 'attraction',
+          openNow: row.opening_hours?.open_now,
+          rating: row.rating,
+          reviewCount: row.user_ratings_total,
+          priceLevel: row.price_level,
+          openingHoursText:
+            typeof row.opening_hours?.open_now === 'boolean'
+              ? row.opening_hours?.open_now
+                ? 'Open now'
+                : 'Closed now'
+              : undefined,
+        },
+      });
+    }
+
+    acceptedRows.sort((a, b) => b.score - a.score);
+    return acceptedRows.map((row) => row.candidate);
   }
 
   private async searchViaOpenStreetMap(
@@ -338,6 +641,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
           const tags = element.tags || {};
           return {
             id: String(element.id),
+            providerId: String(element.id),
             name: String(tags.name),
             lat: Number(element.lat),
             lng: Number(element.lon),
@@ -442,6 +746,7 @@ out body 80;`;
         seen.add(dedupe);
         results.push({
           id: String(row.place_id),
+          providerId: String(row.place_id),
           name: row.name || this.titleFromDisplayName(row.display_name),
           lat,
           lng,
