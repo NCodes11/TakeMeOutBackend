@@ -37,7 +37,7 @@ export default function GeneratedPlanScreen() {
       {orderedStops.length === 0 ? (
         <View style={styles.emptyState}>
           <Text variant="titleMedium" style={styles.emptyTitle}>No stops generated</Text>
-          <Text variant="bodySmall" style={styles.emptyText}>Try adjusting your interests or travel pace.</Text>
+          <Text variant="bodySmall" style={styles.emptyText}>Try adjusting your interests or stop count.</Text>
         </View>
       ) : null}
       {warning ? (

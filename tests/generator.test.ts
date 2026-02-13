@@ -26,7 +26,6 @@ describe('generator', () => {
         kids: 0,
         kidAges: [],
         transport: 'drive',
-        pace: 'balanced',
         budget: '$$',
         preferences: { interests: ['coffee'], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
         startLocationMode: 'my-location',
@@ -63,7 +62,6 @@ describe('generator', () => {
         kids: 0,
         kidAges: [],
         transport: 'drive',
-        pace: 'balanced',
         budget: '$$',
         preferences: { interests: ['coffee', 'bar'], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
         startLocationMode: 'my-location',
@@ -74,7 +72,8 @@ describe('generator', () => {
       routing,
     );
 
-    expect(stops.length).toBe(4);
+    expect(stops.length).toBe(3);
     expect(stops.every((stop) => stop.stopType === 'coffee' || stop.stopType === 'bar')).toBe(true);
+    expect(stops.filter((stop) => stop.stopType === 'coffee')).toHaveLength(1);
   });
 });

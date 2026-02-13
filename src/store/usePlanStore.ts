@@ -60,7 +60,6 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         endTime: input.endTime,
         groupType: input.groupType,
         transport: input.transport,
-        pace: input.pace,
         budget: input.budget,
         preferencesJSON: JSON.stringify(input.preferences),
         createdAt: new Date().toISOString(),

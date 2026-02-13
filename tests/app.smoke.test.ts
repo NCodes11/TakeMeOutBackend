@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { stopsForPace } from '../src/services/scoring';
+import { buildStopAllocation } from '../src/services/itineraryEngine';
 
 describe('smoke flow approximator', () => {
-  it('can compute a packed day stop target for plan creation', () => {
-    expect(stopsForPace('packed', 540)).toBeGreaterThanOrEqual(5);
+  it('builds stable allocation token count for plan creation', () => {
+    const allocation = buildStopAllocation(['coffee', 'outdoors', 'shopping'], 4);
+    expect(allocation.length).toBe(4);
   });
 });

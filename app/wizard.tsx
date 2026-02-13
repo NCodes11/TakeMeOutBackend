@@ -6,7 +6,7 @@ import { AppCard, AppScreen, PrimaryButton } from '@/components/ui';
 import { STOP_TYPE_OPTIONS, stopTypeLabel } from '@/constants/stopTypes';
 import { useLocation } from '@/context/LocationContext';
 import { usePlanStore } from '@/store/usePlanStore';
-import { BudgetType, GroupType, PaceType, StopType, TransportType, WizardInput } from '@/types/models';
+import { BudgetType, GroupType, StopType, TransportType, WizardInput } from '@/types/models';
 import { palette, spacing } from '@/theme/appTheme';
 
 const defaultInput = (city: string): WizardInput => ({
@@ -19,7 +19,6 @@ const defaultInput = (city: string): WizardInput => ({
   kids: 0,
   kidAges: [],
   transport: 'drive',
-  pace: 'balanced',
   budget: '$$',
   preferences: {
     interests: ['coffee', 'activity', 'outdoors'],
@@ -101,11 +100,6 @@ export default function WizardScreen() {
         value={input.transport}
         onValueChange={(v) => setInput({ ...input, transport: v as TransportType })}
         buttons={[{ value: 'walk', label: 'Walk' }, { value: 'drive', label: 'Drive' }]}
-      />
-      <SegmentedButtons
-        value={input.pace}
-        onValueChange={(v) => setInput({ ...input, pace: v as PaceType })}
-        buttons={[{ value: 'relaxed', label: 'Relaxed' }, { value: 'balanced', label: 'Balanced' }, { value: 'packed', label: 'Packed' }]}
       />
       <SegmentedButtons
         value={input.budget}

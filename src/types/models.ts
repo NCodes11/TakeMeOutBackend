@@ -1,6 +1,5 @@
 export type GroupType = 'Date' | 'Family' | 'Friends';
 export type TransportType = 'walk' | 'drive';
-export type PaceType = 'relaxed' | 'balanced' | 'packed';
 export type BudgetType = '$' | '$$' | '$$$';
 export type StopType = 'coffee' | 'restaurant' | 'bar' | 'dessert' | 'activity' | 'outdoors' | 'shopping' | 'arts';
 
@@ -22,7 +21,6 @@ export interface Plan {
   endTime: string;
   groupType: GroupType;
   transport: TransportType;
-  pace: PaceType;
   budget: BudgetType;
   preferencesJSON: string;
   createdAt: string;
@@ -99,7 +97,6 @@ export interface WizardInput {
   kids: number;
   kidAges: number[];
   transport: TransportType;
-  pace: PaceType;
   budget: BudgetType;
   preferences: PlanPreferences;
   startLocationMode: 'my-location' | 'custom';

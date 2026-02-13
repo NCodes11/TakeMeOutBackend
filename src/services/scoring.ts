@@ -15,8 +15,3 @@ export const scorePlace = (place: PlaceCandidate, preferences: PlanPreferences):
   if (preferences.mustInclude && place.name.toLowerCase().includes(preferences.mustInclude.toLowerCase())) score += 3;
   return score;
 };
-
-export const stopsForPace = (pace: 'relaxed' | 'balanced' | 'packed', minutes: number): number => {
-  const base = pace === 'relaxed' ? 3 : pace === 'balanced' ? 4 : 6;
-  return Math.max(3, Math.min(base, Math.floor(minutes / 90)));
-};

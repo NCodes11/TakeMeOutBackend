@@ -1,7 +1,7 @@
 import { PlaceCandidate, Stop, StopType, WizardInput } from '@/types/models';
-import { normalizeSelectedStopTypes, STOP_TYPE_OPTIONS } from '@/constants/stopTypes';
-import { stopsForPace, scorePlace } from './scoring';
+import { normalizeSelectedStopTypes } from '@/constants/stopTypes';
 import { RoutingProvider } from '@/providers/routingProvider';
+import { buildStopAllocation, enforceCapsAndAdjacency, orderAllocation, selectPlaceForToken } from './itineraryEngine';
 
 const parseMinutes = (time: string) => {
   const [h, m] = time.split(':').map(Number);
@@ -10,6 +10,7 @@ const parseMinutes = (time: string) => {
 
 const toTime = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
 
 export const generateStops = async (
   planId: string,
@@ -22,17 +23,62 @@ export const generateStops = async (
     (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && (p.lat !== 0 || p.lng !== 0),
   );
 
+  if (selectedStopTypes.length === 0) throw new Error('Select at least one stop type to generate a plan.');
   const totalMinutes = parseMinutes(input.endTime) - parseMinutes(input.startTime);
-  const defaultCount = stopsForPace(input.pace, totalMinutes);
-  const requestedCount = Math.max(1, Math.min(6, Math.floor(input.stopCount || defaultCount)));
+  if (totalMinutes <= 0) throw new Error('End time must be after start time.');
+  const requestedCount = Math.max(1, Math.min(6, Math.floor(input.stopCount || 1)));
 
-  const ranked = [...validCandidates]
-    .map((p) => ({ p, s: scorePlace(p, input.preferences) }))
-    .sort((a, b) => b.s - a.s)
-    .slice(0, Math.max(requestedCount * 3, 8))
-    .map((r) => r.p);
+  const allocation = buildStopAllocation(selectedStopTypes, requestedCount);
+  const orderedTokens = enforceCapsAndAdjacency(orderAllocation(allocation, input.startTime, input.endTime));
+  if (isDev) {
+    console.log('[plan][engine] allocation_tokens', allocation);
+    console.log('[plan][engine] ordered_tokens', orderedTokens);
+  }
 
-  const selected = pickDiverseStops(ranked, selectedStopTypes, requestedCount);
+  const byType = new Map<StopType, PlaceCandidate[]>();
+  validCandidates.forEach((candidate) => {
+    const list = byType.get(candidate.stopType) || [];
+    list.push(candidate);
+    byType.set(candidate.stopType, list);
+  });
+
+  const selected: PlaceCandidate[] = [];
+  const usedPlaceIds = new Set<string>();
+  orderedTokens.forEach((token, tokenIndex) => {
+    const tokenCandidates = (byType.get(token) || []).filter((candidate) => !usedPlaceIds.has(candidate.id));
+    const picked =
+      selectPlaceForToken({
+        token,
+        tokenIndex,
+        seed: planId,
+        candidates: tokenCandidates,
+        selected,
+        input,
+      }) ||
+      selectPlaceForToken({
+        token,
+        tokenIndex,
+        seed: `${planId}-fallback`,
+        candidates: validCandidates.filter(
+          (candidate) => !usedPlaceIds.has(candidate.id) && selectedStopTypes.includes(candidate.stopType),
+        ),
+        selected,
+        input,
+      });
+    if (picked) {
+      usedPlaceIds.add(picked.id);
+      selected.push(picked);
+      if (isDev) {
+        console.log('[plan][engine] selected_place', {
+          token,
+          tokenIndex,
+          place: picked.name,
+          stopType: picked.stopType,
+        });
+      }
+    }
+  });
+
   if (selected.length === 0) throw new Error('No real nearby places found. Try another location or interests.');
 
   const coords = selected.map((s) => [s.lat, s.lng] as [number, number]);
@@ -71,46 +117,4 @@ export const generateStops = async (
       stopType: s.stopType,
     };
   });
-};
-
-const pickDiverseStops = (ranked: PlaceCandidate[], selectedStopTypes: StopType[], targetCount: number): PlaceCandidate[] => {
-  const byType = new Map<StopType, PlaceCandidate[]>();
-  for (const candidate of ranked) {
-    const list = byType.get(candidate.stopType) || [];
-    list.push(candidate);
-    byType.set(candidate.stopType, list);
-  }
-
-  const selected: PlaceCandidate[] = [];
-  const used = new Set<string>();
-  const pattern = selectedStopTypes.length > 0 ? selectedStopTypes : inferPatternFromCandidates(ranked);
-
-  let index = 0;
-  while (selected.length < targetCount) {
-    const preferredType = pattern[index % pattern.length];
-    const preferredList = (byType.get(preferredType) || []).filter((candidate) => !used.has(candidate.id));
-    const lastType = selected[selected.length - 1]?.stopType;
-    let next = preferredList.find((candidate) => pattern.length === 1 || candidate.stopType !== lastType);
-
-    if (!next) {
-      next = ranked.find((candidate) => {
-        if (used.has(candidate.id)) return false;
-        if (pattern.length === 1) return true;
-        return candidate.stopType !== lastType;
-      });
-    }
-
-    if (!next) break;
-    selected.push(next);
-    used.add(next.id);
-    index += 1;
-  }
-
-  return selected;
-};
-
-const inferPatternFromCandidates = (ranked: PlaceCandidate[]): StopType[] => {
-  const stopTypes = Array.from(new Set(ranked.map((candidate) => candidate.stopType)));
-  if (stopTypes.length > 0) return stopTypes;
-  return STOP_TYPE_OPTIONS.map((option) => option.id).slice(0, 2);
 };

@@ -88,7 +88,7 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
         plan.endTime,
         plan.groupType,
         plan.transport,
-        plan.pace,
+        'legacy',
         plan.budget,
         plan.preferencesJSON,
         plan.createdAt,
@@ -123,9 +123,19 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
 
 export const getPlans = (): Plan[] =>
   db
-    .getAllSync<Omit<Plan, 'returnToStart'> & { returnToStart: unknown }>('SELECT * FROM Plan ORDER BY createdAt DESC')
+    .getAllSync<Omit<Plan, 'returnToStart'> & { pace?: unknown; returnToStart: unknown }>('SELECT * FROM Plan ORDER BY createdAt DESC')
     .map((plan) => ({
-      ...plan,
+      id: plan.id,
+      title: plan.title,
+      city: plan.city,
+      date: plan.date,
+      startTime: plan.startTime,
+      endTime: plan.endTime,
+      groupType: plan.groupType,
+      transport: plan.transport,
+      budget: plan.budget,
+      preferencesJSON: plan.preferencesJSON,
+      createdAt: plan.createdAt,
       returnToStart: coerceBoolean(plan.returnToStart),
     }));
 
@@ -165,9 +175,19 @@ export const cachePlaces = (rows: { providerKey: string; name: string; lat: numb
   });
 };
 
-export const getCachedPlaces = (providerKey: string, maxAgeHours = 12): any[] => {
+interface CachedPlaceRow {
+  providerKey: string;
+  name: string;
+  lat: number;
+  lng: number;
+  category: string;
+  rawJSON: string;
+  cachedAt: string;
+}
+
+export const getCachedPlaces = (providerKey: string, maxAgeHours = 12): CachedPlaceRow[] => {
   const cutoff = new Date(Date.now() - maxAgeHours * 3600_000).toISOString();
-  return db.getAllSync<any>(
+  return db.getAllSync<CachedPlaceRow>(
     'SELECT * FROM CachedPlace WHERE providerKey = ? AND cachedAt > ? ORDER BY cachedAt DESC LIMIT 100',
     [providerKey, cutoff],
   );
