@@ -1,6 +1,7 @@
 import { cachePlaces, getCachedPlaces } from '@/db/sqlite';
 import { PlaceCandidate, StopType } from '@/types/models';
 import { normalizeSelectedStopTypes, STOP_TYPE_OPTIONS } from '@/constants/stopTypes';
+import { evaluateOutdoorsRelevance } from './outdoorsRelevance';
 
 interface SearchOrigin {
   lat: number;
@@ -42,6 +43,10 @@ interface GoogleNearbyPlace {
   };
   types?: string[];
 }
+
+const googleOutdoorsNearbyTypes = ['park', 'tourist_attraction'];
+const googleOutdoorsTextQueries = ['parks near me', 'hiking trails near me', 'nature preserve near me'];
+const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
 
 export interface PlacesProvider {
   search(city: string, interests: string[], origin?: SearchOrigin, desiredCount?: number): Promise<{ places: PlaceCandidate[]; warnings: string[] }>;
@@ -212,6 +217,11 @@ export class NominatimOverpassProvider implements PlacesProvider {
     const radiusMeters = 8000;
 
     for (const stopType of stopTypes) {
+      if (stopType === 'outdoors') {
+        const outdoors = await this.searchGoogleOutdoors(origin, perTypeLimit, radiusMeters, apiKey);
+        results.push(...outdoors);
+        continue;
+      }
       const mapping = keywordsByType[stopType] || {};
       const url = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
       url.searchParams.set('location', `${origin.lat},${origin.lng}`);
@@ -257,6 +267,95 @@ export class NominatimOverpassProvider implements PlacesProvider {
     }
 
     return results;
+  }
+
+  private async searchGoogleOutdoors(
+    origin: SearchOrigin,
+    perTypeLimit: number,
+    radiusMeters: number,
+    apiKey: string,
+  ): Promise<PlaceCandidate[]> {
+    const merged = new Map<string, GoogleNearbyPlace>();
+    for (const placeType of googleOutdoorsNearbyTypes) {
+      const nearbyUrl = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
+      nearbyUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+      nearbyUrl.searchParams.set('radius', String(radiusMeters));
+      nearbyUrl.searchParams.set('type', placeType);
+      nearbyUrl.searchParams.set('key', apiKey);
+      const nearbyRows = await this.fetchGooglePlaces(nearbyUrl.toString(), perTypeLimit);
+      nearbyRows.forEach((row) => merged.set(row.place_id, row));
+    }
+
+    if (merged.size < perTypeLimit) {
+      for (const query of googleOutdoorsTextQueries) {
+        const textUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
+        textUrl.searchParams.set('query', query);
+        textUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+        textUrl.searchParams.set('radius', String(radiusMeters));
+        textUrl.searchParams.set('key', apiKey);
+        const textRows = await this.fetchGooglePlaces(textUrl.toString(), perTypeLimit);
+        textRows.forEach((row) => merged.set(row.place_id, row));
+      }
+    }
+
+    const outdoorsCandidates: PlaceCandidate[] = [];
+    for (const row of merged.values()) {
+      const lat = row.geometry?.location?.lat;
+      const lng = row.geometry?.location?.lng;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const placeName = (row.name || '').trim();
+      if (!placeName) continue;
+
+      const relevance = evaluateOutdoorsRelevance({
+        name: placeName,
+        vicinity: row.vicinity || row.formatted_address || '',
+        types: row.types || [],
+      });
+      if (!relevance.accepted) {
+        if (isDev) {
+          console.log('[places][outdoors][reject]', {
+            name: placeName,
+            types: row.types || [],
+            score: relevance.score,
+            reasons: relevance.reasons,
+          });
+        }
+        continue;
+      }
+
+      outdoorsCandidates.push({
+        id: row.place_id || `${placeName}-${lat}-${lng}`,
+        name: placeName,
+        lat: Number(lat),
+        lng: Number(lng),
+        category: this.categoryFromGoogleTypes(row.types || [], 'outdoors'),
+        address: row.vicinity || row.formatted_address || 'Address unavailable',
+        tags: row.types || ['outdoors'],
+        costLevel: this.priceLevelToCost(row.price_level),
+        stopType: 'outdoors',
+        openNow: row.opening_hours?.open_now,
+        rating: row.rating,
+        priceLevel: row.price_level,
+        openingHoursText:
+          typeof row.opening_hours?.open_now === 'boolean'
+            ? row.opening_hours?.open_now
+              ? 'Open now'
+              : 'Closed now'
+            : undefined,
+      });
+    }
+
+    return outdoorsCandidates;
+  }
+
+  private async fetchGooglePlaces(url: string, limit: number): Promise<GoogleNearbyPlace[]> {
+    try {
+      const response = await fetch(url);
+      const json = (await response.json()) as { results?: GoogleNearbyPlace[] };
+      return (json.results || []).slice(0, limit);
+    } catch {
+      return [];
+    }
   }
 
   private buildOverpassQuery(lat: number, lng: number, stopTypes: StopType[]) {
