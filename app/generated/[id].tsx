@@ -21,6 +21,7 @@ export default function GeneratedPlanScreen() {
   const warning = usePlanStore((s) => s.warning);
   const [view, setView] = useState<'timeline' | 'list'>('timeline');
   const plan = plans.find((p) => p.id === id);
+  const orderedStops = [...stops].sort((a, b) => a.order - b.order);
   if (!plan) return <Text>Plan not found</Text>;
 
   return (
@@ -32,8 +33,8 @@ export default function GeneratedPlanScreen() {
         }}
         buttons={[{ value: 'timeline', label: 'Timeline' }, { value: 'list', label: 'List' }]}
       />
-      <RouteMap stops={stops} />
-      {stops.length === 0 ? (
+      <RouteMap stops={orderedStops} />
+      {orderedStops.length === 0 ? (
         <View style={styles.emptyState}>
           <Text variant="titleMedium" style={styles.emptyTitle}>No stops generated</Text>
           <Text variant="bodySmall" style={styles.emptyText}>Try adjusting your interests or travel pace.</Text>
@@ -44,22 +45,39 @@ export default function GeneratedPlanScreen() {
           <Text variant="bodySmall" style={styles.warningText}>{warning}</Text>
         </View>
       ) : null}
-      {stops.map((s) => (
-        <StopCard
-          key={s.id}
-          stop={s}
-          onLock={() => lockStop(id, s.id, s.locked !== 1)}
-          onOpenMap={
-            hasValidCoords({ lat: s.lat, lng: s.lng })
-              ? async () => {
-                  const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
-                  console.log('[maps] open_stop_pin', { stop: s.name, destination: { lat: s.lat, lng: s.lng }, url });
-                  await Linking.openURL(url);
-                }
-              : undefined
-          }
-        />
-      ))}
+      {view === 'timeline'
+        ? orderedStops.map((s) => (
+            <StopCard
+              key={s.id}
+              stop={s}
+              onLock={() => lockStop(id, s.id, s.locked !== 1)}
+              onOpenMap={
+                hasValidCoords({ lat: s.lat, lng: s.lng })
+                  ? async () => {
+                      const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
+                      console.log('[maps] open_stop_pin', { stop: s.name, destination: { lat: s.lat, lng: s.lng }, url });
+                      await Linking.openURL(url);
+                    }
+                  : undefined
+              }
+            />
+          ))
+        : orderedStops.map((s, index) => (
+            <AppCard key={s.id}>
+              <Card.Title title={`${index + 1}. ${s.name}`} subtitle={`${s.category} · ${s.address}`} />
+              <Card.Actions>
+                <SecondaryButton
+                  onPress={async () => {
+                    if (!hasValidCoords({ lat: s.lat, lng: s.lng })) return;
+                    const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
+                    await Linking.openURL(url);
+                  }}
+                >
+                  Open in Maps
+                </SecondaryButton>
+              </Card.Actions>
+            </AppCard>
+          ))}
       <View style={styles.actions}>
         <SecondaryButton onPress={() => router.push(`/plan/${id}`)}>Plan detail</SecondaryButton>
         <PrimaryButton onPress={() => router.push(`/today/${id}`)}>Today mode</PrimaryButton>

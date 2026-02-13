@@ -46,6 +46,11 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const { places, warnings } = await provider.search(input.city, input.preferences.interests, origin, input.stopCount);
       console.log('[plan] candidates_loaded', { count: places.length, city: input.city });
       const stops = await generateStops(planId, input, places, routing);
+      console.log('[plan] generated', {
+        requestedStopCount: input.stopCount,
+        actualStopCount: stops.length,
+        selectedTypes: input.preferences.interests,
+      });
       const plan: Plan = {
         id: planId,
         title: `${input.city} ${input.groupType} Day`,
@@ -98,6 +103,11 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const origin = input.startLat != null && input.startLng != null ? { lat: input.startLat, lng: input.startLng } : undefined;
     const { places, warnings } = await provider.search(input.city, input.preferences.interests, origin, input.stopCount);
     let stops = await generateStops(planId, input, places, routing);
+    console.log('[plan] regenerated', {
+      requestedStopCount: input.stopCount,
+      actualStopCount: stops.length,
+      selectedTypes: input.preferences.interests,
+    });
     stops = stops.map((s) => locked.find((l) => l.order === s.order) || s);
     const plan = get().plans.find((p) => p.id === planId);
     if (plan) savePlan(plan, stops);

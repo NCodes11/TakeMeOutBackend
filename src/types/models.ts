@@ -45,6 +45,9 @@ export interface Stop {
   why: string;
   locked: number;
   openNow?: boolean;
+  rating?: number;
+  openingHoursText?: string;
+  priceLevel?: number;
   distanceKm?: number;
   etaMin?: number;
   stopType?: StopType;
@@ -76,6 +79,9 @@ export interface PlaceCandidate {
   address: string;
   costLevel?: string;
   openNow?: boolean;
+  rating?: number;
+  openingHoursText?: string;
+  priceLevel?: number;
   tags: string[];
   stopType: StopType;
 }

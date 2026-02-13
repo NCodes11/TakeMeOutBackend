@@ -4,7 +4,7 @@ import { scorePlace, stopsForPace } from '../src/services/scoring';
 describe('scoring', () => {
   it('scores matching interests and constraints', () => {
     const score = scorePlace(
-      { id: '1', name: 'Family Park', lat: 0, lng: 0, category: 'Parks', address: 'A', tags: ['kid', 'park'] },
+      { id: '1', name: 'Family Park', lat: 0, lng: 0, category: 'Parks', address: 'A', tags: ['kid', 'park'], stopType: 'outdoors' },
       {
         interests: ['Parks'],
         avoid: ['bar'],

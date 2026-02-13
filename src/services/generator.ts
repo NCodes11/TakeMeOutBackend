@@ -1,4 +1,3 @@
-import * as Crypto from 'expo-crypto';
 import { PlaceCandidate, Stop, StopType, WizardInput } from '@/types/models';
 import { normalizeSelectedStopTypes, STOP_TYPE_OPTIONS } from '@/constants/stopTypes';
 import { stopsForPace, scorePlace } from './scoring';
@@ -10,6 +9,7 @@ const parseMinutes = (time: string) => {
 };
 
 const toTime = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 export const generateStops = async (
   planId: string,
@@ -48,7 +48,7 @@ export const generateStops = async (
     const end = Math.min(cursor + stopDuration, parseMinutes(input.endTime));
     cursor = end;
     return {
-      id: Crypto.randomUUID(),
+      id: createId(),
       planId,
       order: index,
       name: s.name,
@@ -63,6 +63,9 @@ export const generateStops = async (
       why: `Fits your ${input.groupType.toLowerCase()} day and ${input.preferences.interests[0] || 'general'} interests.`,
       locked: 0,
       openNow: s.openNow,
+      rating: s.rating,
+      openingHoursText: s.openingHoursText,
+      priceLevel: s.priceLevel,
       etaMin: travel,
       distanceKm: distance,
       stopType: s.stopType,

@@ -6,11 +6,18 @@ const routing = {
 };
 
 describe('generator', () => {
-  it('generates valid timeline stops', async () => {
+  it('generates requested stop count when enough candidates exist', async () => {
+    const candidates = [
+      { id: '1', name: 'Cafe One', lat: 37.77, lng: -122.41, category: 'Coffee/Dessert', address: 'A', tags: ['coffee'], stopType: 'coffee' },
+      { id: '2', name: 'Cafe Two', lat: 37.78, lng: -122.42, category: 'Coffee/Dessert', address: 'B', tags: ['coffee'], stopType: 'coffee' },
+      { id: '3', name: 'Cafe Three', lat: 37.79, lng: -122.43, category: 'Coffee/Dessert', address: 'C', tags: ['coffee'], stopType: 'coffee' },
+      { id: '4', name: 'Cafe Four', lat: 37.8, lng: -122.44, category: 'Coffee/Dessert', address: 'D', tags: ['coffee'], stopType: 'coffee' },
+    ];
     const stops = await generateStops(
       'p1',
       {
-        city: 'SF',
+        city: 'Orlando,FL',
+        stopCount: 4,
         date: '2026-01-01',
         startTime: '09:00',
         endTime: '18:00',
@@ -21,21 +28,53 @@ describe('generator', () => {
         transport: 'drive',
         pace: 'balanced',
         budget: '$$',
-        preferences: { interests: ['Food'], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
+        preferences: { interests: ['coffee'], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
         startLocationMode: 'my-location',
         startAddress: '',
         returnToStart: true,
       },
-      [
-        { id: '1', name: 'Cafe', lat: 1, lng: 1, category: 'Food', address: 'A', tags: ['Food'] },
-        { id: '2', name: 'Park', lat: 1, lng: 1, category: 'Parks', address: 'B', tags: ['Outdoors'] },
-        { id: '3', name: 'Museum', lat: 1, lng: 1, category: 'Museums', address: 'C', tags: ['Museums'] },
-        { id: '4', name: 'Dinner', lat: 1, lng: 1, category: 'Food', address: 'D', tags: ['Food'] },
-      ],
-      routing as any,
+      candidates,
+      routing,
     );
 
-    expect(stops.length).toBeGreaterThanOrEqual(3);
+    expect(stops.length).toBe(4);
     expect(stops[0].planId).toBe('p1');
+    expect(stops.every((stop) => stop.stopType === 'coffee')).toBe(true);
+  });
+
+  it('returns only selected stop types when multiple exist', async () => {
+    const candidates = [
+      { id: '1', name: 'Cafe One', lat: 37.77, lng: -122.41, category: 'Coffee/Dessert', address: 'A', tags: ['coffee'], stopType: 'coffee' },
+      { id: '2', name: 'Pub One', lat: 37.78, lng: -122.42, category: 'Nightlife', address: 'B', tags: ['bar'], stopType: 'bar' },
+      { id: '3', name: 'Cafe Two', lat: 37.79, lng: -122.43, category: 'Coffee/Dessert', address: 'C', tags: ['coffee'], stopType: 'coffee' },
+      { id: '4', name: 'Pub Two', lat: 37.8, lng: -122.44, category: 'Nightlife', address: 'D', tags: ['bar'], stopType: 'bar' },
+      { id: '5', name: 'Bistro', lat: 37.81, lng: -122.45, category: 'Food', address: 'E', tags: ['restaurant'], stopType: 'restaurant' },
+    ];
+    const stops = await generateStops(
+      'p2',
+      {
+        city: 'Orlando,FL',
+        stopCount: 4,
+        date: '2026-01-01',
+        startTime: '09:00',
+        endTime: '18:00',
+        groupType: 'Date',
+        adults: 2,
+        kids: 0,
+        kidAges: [],
+        transport: 'drive',
+        pace: 'balanced',
+        budget: '$$',
+        preferences: { interests: ['coffee', 'bar'], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
+        startLocationMode: 'my-location',
+        startAddress: '',
+        returnToStart: true,
+      },
+      candidates,
+      routing,
+    );
+
+    expect(stops.length).toBe(4);
+    expect(stops.every((stop) => stop.stopType === 'coffee' || stop.stopType === 'bar')).toBe(true);
   });
 });
