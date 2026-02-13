@@ -2,6 +2,7 @@ import { PlaceCandidate, Stop, StopType, WizardInput } from '@/types/models';
 import { normalizeSelectedStopTypes } from '@/constants/stopTypes';
 import { RoutingProvider } from '@/providers/routingProvider';
 import { buildStopAllocation, enforceCapsAndAdjacency, orderAllocation, selectPlaceForToken } from './itineraryEngine';
+import { evaluateCategoryCandidate } from '@/providers/categoryPolicy';
 
 const parseMinutes = (time: string) => {
   const [h, m] = time.split(':').map(Number);
@@ -43,6 +44,7 @@ export const generateStops = async (
   });
 
   const selected: PlaceCandidate[] = [];
+  const selectedTokens: StopType[] = [];
   const usedPlaceIds = new Set<string>();
   orderedTokens.forEach((token, tokenIndex) => {
     const tokenCandidates = (byType.get(token) || []).filter((candidate) => !usedPlaceIds.has(candidate.id));
@@ -68,6 +70,7 @@ export const generateStops = async (
     if (picked) {
       usedPlaceIds.add(picked.id);
       selected.push(picked);
+      selectedTokens.push(token);
       if (isDev) {
         console.log('[plan][engine] selected_place', {
           token,
@@ -78,6 +81,55 @@ export const generateStops = async (
       }
     }
   });
+
+  for (let index = 0; index < selected.length; index += 1) {
+    const stopType = selectedTokens[index] || selected[index].stopType;
+    const current = selected[index];
+    const validation = evaluateCategoryCandidate(stopType, {
+      name: current.name,
+      address: current.address,
+      types: current.tags,
+    });
+    if (validation.accepted) continue;
+
+    const replacementPool = validCandidates.filter((candidate) => {
+      if (usedPlaceIds.has(candidate.id) && candidate.id !== current.id) return false;
+      if (candidate.id === current.id) return false;
+      const check = evaluateCategoryCandidate(stopType, {
+        name: candidate.name,
+        address: candidate.address,
+        types: candidate.tags,
+      });
+      return check.accepted;
+    });
+    const replacement = selectPlaceForToken({
+      token: stopType,
+      tokenIndex: index,
+      seed: `${planId}-validation`,
+      candidates: replacementPool,
+      selected: selected.slice(0, index),
+      input,
+    });
+    if (replacement) {
+      usedPlaceIds.delete(current.id);
+      usedPlaceIds.add(replacement.id);
+      selected[index] = replacement;
+      if (isDev) {
+        console.log('[plan][engine] validation_replaced', {
+          token: stopType,
+          replaced: current.name,
+          replacement: replacement.name,
+          reasons: validation.reasons,
+        });
+      }
+    } else if (isDev) {
+      console.log('[plan][engine] validation_reject_no_replacement', {
+        token: stopType,
+        place: current.name,
+        reasons: validation.reasons,
+      });
+    }
+  }
 
   if (selected.length === 0) throw new Error('No real nearby places found. Try another location or interests.');
 

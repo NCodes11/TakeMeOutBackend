@@ -1,7 +1,7 @@
-import { cachePlaces, getCachedPlaces } from '@/db/sqlite';
-import { PlaceCandidate, StopType } from '@/types/models';
+import { getCachedPlaces } from '@/db/sqlite';
 import { normalizeSelectedStopTypes, STOP_TYPE_OPTIONS } from '@/constants/stopTypes';
-import { evaluateOutdoorsRelevance } from './outdoorsRelevance';
+import { PlaceCandidate, StopType, TransportType } from '@/types/models';
+import { CATEGORY_POLICIES, evaluateCategoryCandidate } from './categoryPolicy';
 
 interface SearchOrigin {
   lat: number;
@@ -44,40 +44,74 @@ interface GoogleNearbyPlace {
   types?: string[];
 }
 
-const googleOutdoorsNearbyTypes = ['park', 'tourist_attraction'];
-const googleOutdoorsTextQueries = ['parks near me', 'hiking trails near me', 'nature preserve near me'];
-const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
-
-export interface PlacesProvider {
-  search(city: string, interests: string[], origin?: SearchOrigin, desiredCount?: number): Promise<{ places: PlaceCandidate[]; warnings: string[] }>;
+export interface PlacesSearchOptions {
+  transport?: TransportType;
+  maxTravelMinutes?: number;
 }
 
+export interface PlacesProvider {
+  search(
+    city: string,
+    interests: string[],
+    origin?: SearchOrigin,
+    desiredCount?: number,
+    options?: PlacesSearchOptions,
+  ): Promise<{ places: PlaceCandidate[]; warnings: string[] }>;
+}
+
+const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+const MAX_RADIUS_METERS = 60000;
 const rateLimiter = { lastMs: 0 };
+
 const waitIfNeeded = async () => {
   const gap = 1100 - (Date.now() - rateLimiter.lastMs);
-  if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+  if (gap > 0) await new Promise((resolve) => setTimeout(resolve, gap));
   rateLimiter.lastMs = Date.now();
 };
 
-const stopTypesToKeywords = (stopTypes: StopType[]): Record<StopType, { type?: string; keyword?: string }> => {
-  const defaults: Record<StopType, { type?: string; keyword?: string }> = {
-    coffee: { type: 'cafe', keyword: 'coffee' },
-    restaurant: { type: 'restaurant' },
-    bar: { type: 'bar', keyword: 'pub' },
-    dessert: { type: 'bakery', keyword: 'dessert' },
-    activity: { type: 'tourist_attraction', keyword: 'activity' },
-    outdoors: { type: 'park', keyword: 'outdoor' },
-    shopping: { type: 'shopping_mall', keyword: 'store' },
-    arts: { type: 'museum', keyword: 'art' },
-  };
-  return stopTypes.reduce((acc, stopType) => {
-    acc[stopType] = defaults[stopType];
-    return acc;
-  }, { ...defaults });
+const stopTypesToKeywords = (): Record<StopType, { type?: string; keyword?: string }> => ({
+  coffee: { type: 'cafe', keyword: 'coffee shop' },
+  restaurant: { type: 'restaurant', keyword: 'restaurant' },
+  bar: { type: 'bar', keyword: 'bar pub' },
+  dessert: { type: 'bakery', keyword: 'dessert ice cream' },
+  activity: { type: 'tourist_attraction', keyword: 'activities' },
+  attraction: { type: 'tourist_attraction', keyword: 'theme park attraction' },
+  outdoors: { type: 'park', keyword: 'park trail nature preserve' },
+  shopping: { type: 'shopping_mall', keyword: 'shopping store mall' },
+  arts: { type: 'museum', keyword: 'museum gallery' },
+});
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+};
+
+const buildRadiusSteps = (options?: PlacesSearchOptions) => {
+  const speed = options?.transport === 'walk' ? 4.5 : 35;
+  const minutes = Math.max(10, options?.maxTravelMinutes || 20);
+  const baseMeters = Math.max(10000, Math.min(MAX_RADIUS_METERS, Math.round(((speed * minutes) / 60) * 1000)));
+  const steps = [baseMeters, 20000, 40000, 60000];
+  return Array.from(new Set(steps.filter((value) => value <= MAX_RADIUS_METERS))).sort((a, b) => a - b);
+};
+
+const toCostLevel = (priceLevel?: number): string => {
+  if (typeof priceLevel !== 'number') return 'Unknown';
+  if (priceLevel <= 1) return '$';
+  if (priceLevel <= 3) return '$$';
+  return '$$$';
 };
 
 export class NominatimOverpassProvider implements PlacesProvider {
-  async search(city: string, interests: string[], origin?: SearchOrigin, desiredCount = 3): Promise<{ places: PlaceCandidate[]; warnings: string[] }> {
+  async search(
+    city: string,
+    interests: string[],
+    origin?: SearchOrigin,
+    desiredCount = 3,
+    options?: PlacesSearchOptions,
+  ): Promise<{ places: PlaceCandidate[]; warnings: string[] }> {
     const selectedStopTypes = normalizeSelectedStopTypes(interests);
     const requestedStopTypes: StopType[] = selectedStopTypes.length > 0 ? selectedStopTypes : ['activity', 'outdoors'];
     const targetCount = Math.max(1, Math.min(6, Math.floor(desiredCount)));
@@ -87,42 +121,191 @@ export class NominatimOverpassProvider implements PlacesProvider {
     const cacheKey = origin
       ? `nomi-${origin.lat.toFixed(3)}-${origin.lng.toFixed(3)}-${requestedStopTypes.join('-')}`
       : `nomi-${city.toLowerCase()}-${requestedStopTypes.join('-')}`;
+
     const cached = getCachedPlaces(cacheKey);
     if (cached.length > 0) {
-      const mapped = cached.map((c) => ({
-        id: `${c.lat}-${c.lng}-${c.name}`,
-        name: c.name,
-        lat: c.lat,
-        lng: c.lng,
-        category: c.category,
-        address: c.name,
-        tags: [c.category],
-        stopType: this.categoryToStopType(c.category),
+      const mapped = cached.map((row) => ({
+        id: `${row.lat}-${row.lng}-${row.name}`,
+        name: row.name,
+        lat: row.lat,
+        lng: row.lng,
+        category: row.category,
+        address: row.name,
+        tags: [row.category],
+        stopType: this.categoryToStopType(row.category),
       }));
       const unique = this.dedupePlaces(mapped).slice(0, maxResults);
       if (unique.length < targetCount) warnings.push('Not enough places found nearby.');
-      return {
-        warnings,
-        places: unique,
-      };
+      return { places: unique, warnings };
     }
 
     if (googleApiKey && origin) {
-      const googleRows = await this.searchViaGoogle(stopTypesToKeywords(requestedStopTypes), requestedStopTypes, origin, maxResults, googleApiKey);
+      const googleRows = await this.searchViaGoogle(requestedStopTypes, origin, maxResults, googleApiKey, options);
       const strictGoogleRows = this.filterRowsByStopTypes(googleRows, requestedStopTypes);
       const uniqueGoogleRows = this.dedupePlaces(strictGoogleRows).slice(0, maxResults);
       if (uniqueGoogleRows.length >= targetCount) {
-        console.log('[places] results_sample', {
-          provider: 'google',
-          requestedStopTypes,
-          count: uniqueGoogleRows.length,
-          top: uniqueGoogleRows.slice(0, 3).map((row) => ({ name: row.name, stopType: row.stopType, category: row.category })),
-        });
         return { places: uniqueGoogleRows, warnings };
       }
       warnings.push(`Google Places returned only ${uniqueGoogleRows.length} nearby matches. Falling back to OpenStreetMap.`);
     }
 
+    const openStreet = await this.searchViaOpenStreetMap(city, requestedStopTypes, origin, maxResults, warnings);
+    const unique = this.dedupePlaces(openStreet).slice(0, maxResults);
+    if (unique.length < targetCount) warnings.push('Not enough places found nearby.');
+    return { places: unique, warnings };
+  }
+
+  private async searchViaGoogle(
+    stopTypes: StopType[],
+    origin: SearchOrigin,
+    maxResults: number,
+    apiKey: string,
+    options?: PlacesSearchOptions,
+  ): Promise<PlaceCandidate[]> {
+    const mapping = stopTypesToKeywords();
+    const radiusSteps = buildRadiusSteps(options);
+    const perTypeLimit = Math.max(8, Math.min(20, Math.ceil(maxResults / Math.max(1, stopTypes.length)) + 4));
+    const results: PlaceCandidate[] = [];
+
+    for (const stopType of stopTypes) {
+      const policy = CATEGORY_POLICIES[stopType];
+      const merged = new Map<string, GoogleNearbyPlace>();
+      let usedRadius = radiusSteps[0];
+      let rawCandidates = 0;
+
+      for (const radius of radiusSteps) {
+        usedRadius = radius;
+        const nearbyTypes = policy.nearbyTypes.length ? policy.nearbyTypes : [mapping[stopType].type || 'point_of_interest'];
+        for (const nearbyType of nearbyTypes) {
+          const nearbyUrl = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
+          nearbyUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+          nearbyUrl.searchParams.set('radius', String(radius));
+          nearbyUrl.searchParams.set('type', nearbyType);
+          if (mapping[stopType].keyword) nearbyUrl.searchParams.set('keyword', mapping[stopType].keyword as string);
+          nearbyUrl.searchParams.set('key', apiKey);
+          const nearbyRows = await this.fetchGooglePlaces(nearbyUrl.toString(), perTypeLimit);
+          rawCandidates += nearbyRows.length;
+          nearbyRows.forEach((row) => merged.set(row.place_id, row));
+        }
+
+        if (merged.size < perTypeLimit) {
+          for (const query of policy.queryTerms) {
+            const textUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
+            textUrl.searchParams.set('query', query);
+            textUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+            textUrl.searchParams.set('radius', String(radius));
+            textUrl.searchParams.set('key', apiKey);
+            const textRows = await this.fetchGooglePlaces(textUrl.toString(), perTypeLimit);
+            rawCandidates += textRows.length;
+            textRows.forEach((row) => merged.set(row.place_id, row));
+          }
+        }
+
+        const filteredCount = Array.from(merged.values()).filter((row) => {
+          const lat = row.geometry?.location?.lat;
+          const lng = row.geometry?.location?.lng;
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+          return haversineKm(origin.lat, origin.lng, Number(lat), Number(lng)) * 1000 <= radius;
+        }).length;
+        if (filteredCount >= perTypeLimit) break;
+      }
+
+      const acceptedRows: PlaceCandidate[] = [];
+      const debugRows: Array<{ name: string; accepted: boolean; score: number; reasons: string[]; distanceKm: number; types: string[] }> = [];
+
+      for (const row of merged.values()) {
+        const lat = row.geometry?.location?.lat;
+        const lng = row.geometry?.location?.lng;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        const name = (row.name || '').trim();
+        if (!name) continue;
+        const distanceKm = haversineKm(origin.lat, origin.lng, Number(lat), Number(lng));
+        if (distanceKm * 1000 > usedRadius) continue;
+
+        const evaluation = evaluateCategoryCandidate(stopType, {
+          name,
+          address: row.vicinity || row.formatted_address || '',
+          types: row.types || [],
+        });
+
+        debugRows.push({
+          name,
+          accepted: evaluation.accepted,
+          score: evaluation.score,
+          reasons: evaluation.reasons,
+          distanceKm,
+          types: row.types || [],
+        });
+
+        if (!evaluation.accepted) continue;
+        acceptedRows.push({
+          id: row.place_id || `${name}-${lat}-${lng}`,
+          name,
+          lat: Number(lat),
+          lng: Number(lng),
+          category: this.categoryFromGoogleTypes(row.types || [], stopType),
+          address: row.vicinity || row.formatted_address || 'Address unavailable',
+          tags: row.types || [stopType],
+          costLevel: toCostLevel(row.price_level),
+          stopType,
+          openNow: row.opening_hours?.open_now,
+          rating: row.rating,
+          priceLevel: row.price_level,
+          openingHoursText:
+            typeof row.opening_hours?.open_now === 'boolean'
+              ? row.opening_hours?.open_now
+                ? 'Open now'
+                : 'Closed now'
+              : undefined,
+        });
+      }
+
+      if (isDev) {
+        const topDebug = debugRows
+          .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
+          .slice(0, 5)
+          .map((row) => ({
+            name: row.name,
+            accepted: row.accepted,
+            score: row.score,
+            reasons: row.reasons,
+            distanceKm: Math.round(row.distanceKm * 10) / 10,
+            types: row.types,
+          }));
+        console.log('[places][debug]', {
+          stopType,
+          center: origin,
+          radiusUsed: usedRadius,
+          queryTerms: policy.queryTerms,
+          rawCandidates,
+          filteredCandidates: acceptedRows.length,
+          topCandidates: topDebug,
+        });
+      }
+
+      results.push(...acceptedRows.slice(0, perTypeLimit));
+    }
+
+    return results;
+  }
+
+  private async fetchGooglePlaces(url: string, limit: number): Promise<GoogleNearbyPlace[]> {
+    try {
+      const response = await fetch(url);
+      const json = (await response.json()) as { results?: GoogleNearbyPlace[] };
+      return (json.results || []).slice(0, limit);
+    } catch {
+      return [];
+    }
+  }
+
+  private async searchViaOpenStreetMap(
+    city: string,
+    stopTypes: StopType[],
+    origin?: SearchOrigin,
+    maxResults = 60,
+    warnings?: string[],
+  ): Promise<PlaceCandidate[]> {
     try {
       let centerLat = origin?.lat;
       let centerLng = origin?.lng;
@@ -135,13 +318,12 @@ export class NominatimOverpassProvider implements PlacesProvider {
         );
         const geoJson = (await geocode.json()) as { lat: string; lon: string }[];
         const center = geoJson[0];
-        if (!center) return { places: [], warnings: ['Could not resolve this city. Try entering a nearby city.'] };
+        if (!center) return [];
         centerLat = Number(center.lat);
         centerLng = Number(center.lon);
       }
 
-      const query = this.buildOverpassQuery(centerLat, centerLng, requestedStopTypes);
-      console.log('[places] overpass_query', { city, requestedStopTypes, centerLat, centerLng, stopCount: targetCount, query });
+      const query = this.buildOverpassQuery(centerLat, centerLng, stopTypes);
       await waitIfNeeded();
       const overpass = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
@@ -150,15 +332,15 @@ export class NominatimOverpassProvider implements PlacesProvider {
       });
       const overpassJson = (await overpass.json()) as { elements?: OverpassElement[] };
       const rows = (overpassJson.elements || [])
-        .filter((el) => typeof el.lat === 'number' && typeof el.lon === 'number' && el.tags?.name)
+        .filter((element) => typeof element.lat === 'number' && typeof element.lon === 'number' && element.tags?.name)
         .slice(0, maxResults)
-        .map((el) => {
-          const tags = el.tags || {};
+        .map((element) => {
+          const tags = element.tags || {};
           return {
-            id: String(el.id),
+            id: String(element.id),
             name: String(tags.name),
-            lat: Number(el.lat),
-            lng: Number(el.lon),
+            lat: Number(element.lat),
+            lng: Number(element.lon),
             category: this.categoryFromTags(tags),
             address: this.addressFromTags(tags, city),
             tags: Object.values(tags).map(String),
@@ -167,194 +349,13 @@ export class NominatimOverpassProvider implements PlacesProvider {
           };
         });
 
-      const filteredRows = this.filterRowsByStopTypes(rows, requestedStopTypes);
-      const missingTypes = requestedStopTypes.filter((type) => !filteredRows.some((row) => row.stopType === type));
-      if (missingTypes.length > 0) {
-        warnings.push(`Limited results for ${missingTypes.join(', ')}. Added nearby alternatives.`);
-      }
-
-      const mergedRows =
-        filteredRows.length > 0
-          ? filteredRows
-          : await this.searchViaNominatim(city, requestedStopTypes, origin, maxResults, warnings);
-      const uniqueRows = this.dedupePlaces(mergedRows).slice(0, maxResults);
-      if (uniqueRows.length < targetCount) warnings.push('Not enough places found nearby.');
-
-      cachePlaces(
-        uniqueRows.map((r) => ({
-          providerKey: cacheKey,
-          name: r.name,
-          lat: r.lat,
-          lng: r.lng,
-          category: r.category,
-          rawJSON: JSON.stringify(r),
-        })),
-      );
-
-      console.log('[places] results_sample', {
-        requestedStopTypes,
-        count: uniqueRows.length,
-        top: uniqueRows.slice(0, 3).map((row) => ({ name: row.name, stopType: row.stopType, category: row.category })),
-      });
-      return { places: uniqueRows, warnings };
+      const filtered = this.filterRowsByStopTypes(rows, stopTypes);
+      const missingTypes = stopTypes.filter((type) => !filtered.some((row) => row.stopType === type));
+      if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
+      return filtered.slice(0, maxResults);
     } catch {
-      const nomiFallback = await this.searchViaNominatim(city, requestedStopTypes, origin, maxResults, warnings);
-      const uniqueFallback = this.dedupePlaces(nomiFallback).slice(0, maxResults);
-      if (uniqueFallback.length < targetCount) warnings.push('Not enough places found nearby.');
-      return { places: uniqueFallback, warnings };
-    }
-  }
-
-  private async searchViaGoogle(
-    keywordsByType: Record<StopType, { type?: string; keyword?: string }>,
-    stopTypes: StopType[],
-    origin: SearchOrigin,
-    maxResults: number,
-    apiKey: string,
-  ): Promise<PlaceCandidate[]> {
-    const results: PlaceCandidate[] = [];
-    const perTypeLimit = Math.max(8, Math.min(20, Math.ceil(maxResults / Math.max(1, stopTypes.length)) + 4));
-    const radiusMeters = 8000;
-
-    for (const stopType of stopTypes) {
-      if (stopType === 'outdoors') {
-        const outdoors = await this.searchGoogleOutdoors(origin, perTypeLimit, radiusMeters, apiKey);
-        results.push(...outdoors);
-        continue;
-      }
-      const mapping = keywordsByType[stopType] || {};
-      const url = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
-      url.searchParams.set('location', `${origin.lat},${origin.lng}`);
-      url.searchParams.set('radius', String(radiusMeters));
-      if (mapping.type) url.searchParams.set('type', mapping.type);
-      if (mapping.keyword) url.searchParams.set('keyword', mapping.keyword);
-      url.searchParams.set('key', apiKey);
-
-      try {
-        const response = await fetch(url.toString());
-        const json = (await response.json()) as { results?: GoogleNearbyPlace[]; status?: string };
-        const rows = (json.results || []).slice(0, perTypeLimit);
-        for (const row of rows) {
-          const lat = row.geometry?.location?.lat;
-          const lng = row.geometry?.location?.lng;
-          if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-          const placeName = (row.name || '').trim();
-          if (!placeName) continue;
-          results.push({
-            id: row.place_id || `${placeName}-${lat}-${lng}`,
-            name: placeName,
-            lat: Number(lat),
-            lng: Number(lng),
-            category: this.categoryFromGoogleTypes(row.types || [], stopType),
-            address: row.vicinity || row.formatted_address || 'Address unavailable',
-            tags: row.types || [stopType],
-            costLevel: this.priceLevelToCost(row.price_level),
-            stopType,
-            openNow: row.opening_hours?.open_now,
-            rating: row.rating,
-            priceLevel: row.price_level,
-            openingHoursText:
-              typeof row.opening_hours?.open_now === 'boolean'
-                ? row.opening_hours?.open_now
-                  ? 'Open now'
-                  : 'Closed now'
-                : undefined,
-          });
-        }
-      } catch {
-        // Keep provider resilient; caller handles fallback warning path.
-      }
-    }
-
-    return results;
-  }
-
-  private async searchGoogleOutdoors(
-    origin: SearchOrigin,
-    perTypeLimit: number,
-    radiusMeters: number,
-    apiKey: string,
-  ): Promise<PlaceCandidate[]> {
-    const merged = new Map<string, GoogleNearbyPlace>();
-    for (const placeType of googleOutdoorsNearbyTypes) {
-      const nearbyUrl = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
-      nearbyUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
-      nearbyUrl.searchParams.set('radius', String(radiusMeters));
-      nearbyUrl.searchParams.set('type', placeType);
-      nearbyUrl.searchParams.set('key', apiKey);
-      const nearbyRows = await this.fetchGooglePlaces(nearbyUrl.toString(), perTypeLimit);
-      nearbyRows.forEach((row) => merged.set(row.place_id, row));
-    }
-
-    if (merged.size < perTypeLimit) {
-      for (const query of googleOutdoorsTextQueries) {
-        const textUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
-        textUrl.searchParams.set('query', query);
-        textUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
-        textUrl.searchParams.set('radius', String(radiusMeters));
-        textUrl.searchParams.set('key', apiKey);
-        const textRows = await this.fetchGooglePlaces(textUrl.toString(), perTypeLimit);
-        textRows.forEach((row) => merged.set(row.place_id, row));
-      }
-    }
-
-    const outdoorsCandidates: PlaceCandidate[] = [];
-    for (const row of merged.values()) {
-      const lat = row.geometry?.location?.lat;
-      const lng = row.geometry?.location?.lng;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      const placeName = (row.name || '').trim();
-      if (!placeName) continue;
-
-      const relevance = evaluateOutdoorsRelevance({
-        name: placeName,
-        vicinity: row.vicinity || row.formatted_address || '',
-        types: row.types || [],
-      });
-      if (!relevance.accepted) {
-        if (isDev) {
-          console.log('[places][outdoors][reject]', {
-            name: placeName,
-            types: row.types || [],
-            score: relevance.score,
-            reasons: relevance.reasons,
-          });
-        }
-        continue;
-      }
-
-      outdoorsCandidates.push({
-        id: row.place_id || `${placeName}-${lat}-${lng}`,
-        name: placeName,
-        lat: Number(lat),
-        lng: Number(lng),
-        category: this.categoryFromGoogleTypes(row.types || [], 'outdoors'),
-        address: row.vicinity || row.formatted_address || 'Address unavailable',
-        tags: row.types || ['outdoors'],
-        costLevel: this.priceLevelToCost(row.price_level),
-        stopType: 'outdoors',
-        openNow: row.opening_hours?.open_now,
-        rating: row.rating,
-        priceLevel: row.price_level,
-        openingHoursText:
-          typeof row.opening_hours?.open_now === 'boolean'
-            ? row.opening_hours?.open_now
-              ? 'Open now'
-              : 'Closed now'
-            : undefined,
-      });
-    }
-
-    return outdoorsCandidates;
-  }
-
-  private async fetchGooglePlaces(url: string, limit: number): Promise<GoogleNearbyPlace[]> {
-    try {
-      const response = await fetch(url);
-      const json = (await response.json()) as { results?: GoogleNearbyPlace[] };
-      return (json.results || []).slice(0, limit);
-    } catch {
-      return [];
+      const nominatimFallback = await this.searchViaNominatim(city, stopTypes, origin, maxResults, warnings);
+      return nominatimFallback;
     }
   }
 
@@ -380,6 +381,7 @@ out body 80;`;
     if (values.includes('cafe')) return 'Coffee/Dessert';
     if (values.includes('restaurant')) return 'Food';
     if (values.includes('shop')) return 'Shopping';
+    if (values.includes('amusement') || values.includes('tourist')) return 'Attractions';
     return 'Outdoors';
   }
 
@@ -389,14 +391,15 @@ out body 80;`;
     if (/ice_cream|dessert|bakery/.test(values)) return 'dessert';
     if (/bar|pub|brewery/.test(values)) return 'bar';
     if (/museum|gallery|theatre|arts/.test(values)) return 'arts';
+    if (/amusement|theme_park|tourist_attraction|zoo|aquarium/.test(values)) return 'attraction';
     if (/park|trail|viewpoint|garden|nature/.test(values)) return 'outdoors';
     if (/shop|mall|market|supermarket/.test(values)) return 'shopping';
-    if (/cinema|arcade|bowling|amusement|activity/.test(values)) return 'activity';
+    if (/cinema|arcade|bowling|activity/.test(values)) return 'activity';
     return 'restaurant';
   }
 
   private costLevelFromTags(tags: Record<string, string>) {
-    const value = tags['addr:postcode'] || tags.price_range || '';
+    const value = tags.price_range || '';
     if (value.includes('$$$')) return '$$$';
     if (value.includes('$$')) return '$$';
     return '$$';
@@ -433,7 +436,7 @@ out body 80;`;
         const lat = Number(row.lat);
         const lng = Number(row.lon);
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-        if (origin && this.distanceKm(origin.lat, origin.lng, lat, lng) > 25) continue;
+        if (origin && haversineKm(origin.lat, origin.lng, lat, lng) > 60) continue;
         const dedupe = `${lat.toFixed(4)}-${lng.toFixed(4)}`;
         if (seen.has(dedupe)) continue;
         seen.add(dedupe);
@@ -453,10 +456,7 @@ out body 80;`;
 
     const filtered = this.filterRowsByStopTypes(results, stopTypes);
     const missingTypes = stopTypes.filter((type) => !filtered.some((row) => row.stopType === type));
-    if (missingTypes.length > 0 && warnings) {
-      warnings.push(`Limited results for ${missingTypes.join(', ')}. Used nearby alternatives.`);
-    }
-
+    if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
     return filtered.slice(0, maxResults);
   }
 
@@ -482,16 +482,6 @@ out body 80;`;
     return first || 'Interesting spot';
   }
 
-  private distanceKm(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const toRad = (v: number) => (v * Math.PI) / 180;
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    return 6371 * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-  }
-
   private filterRowsByStopTypes(rows: PlaceCandidate[], requestedStopTypes: StopType[]) {
     if (requestedStopTypes.length === 0) return rows;
     const allowed = new Set<StopType>(requestedStopTypes);
@@ -503,6 +493,7 @@ out body 80;`;
     if (lower.includes('coffee')) return 'coffee';
     if (lower.includes('food')) return 'restaurant';
     if (lower.includes('shop')) return 'shopping';
+    if (lower.includes('attraction')) return 'attraction';
     if (lower.includes('museum')) return 'arts';
     if (lower.includes('park') || lower.includes('outdoors')) return 'outdoors';
     return 'activity';
@@ -514,22 +505,16 @@ out body 80;`;
     if (joined.includes('restaurant')) return 'Food';
     if (joined.includes('bar')) return 'Bars';
     if (joined.includes('park')) return 'Outdoors';
+    if (joined.includes('amusement_park') || joined.includes('theme_park') || joined.includes('tourist_attraction')) return 'Attractions';
     if (joined.includes('museum') || joined.includes('art_gallery')) return 'Arts';
     if (joined.includes('shopping_mall') || joined.includes('store')) return 'Shopping';
     return stopType.charAt(0).toUpperCase() + stopType.slice(1);
   }
 
-  private priceLevelToCost(priceLevel?: number): string {
-    if (typeof priceLevel !== 'number') return 'Unknown';
-    if (priceLevel <= 1) return '$';
-    if (priceLevel <= 3) return '$$';
-    return '$$$';
-  }
-
   private dedupePlaces(rows: PlaceCandidate[]): PlaceCandidate[] {
     const seen = new Set<string>();
     return rows.filter((row) => {
-      const key = `${row.name.toLowerCase()}-${row.lat.toFixed(4)}-${row.lng.toFixed(4)}`;
+      const key = `${row.id}-${row.name.toLowerCase()}-${row.lat.toFixed(4)}-${row.lng.toFixed(4)}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;

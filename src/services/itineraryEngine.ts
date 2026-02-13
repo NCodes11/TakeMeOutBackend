@@ -12,12 +12,13 @@ const TYPE_RULES: Record<StopType, StopTypeRule> = {
   bar: { maxDefault: 1, repeatWeight: 2, importance: 1 },
   dessert: { maxDefault: 1, repeatWeight: 2, importance: 3 },
   activity: { maxDefault: 1, repeatWeight: 4, importance: 5 },
+  attraction: { maxDefault: 1, repeatWeight: 4, importance: 5 },
   outdoors: { maxDefault: 1, repeatWeight: 3, importance: 5 },
   shopping: { maxDefault: Number.POSITIVE_INFINITY, repeatWeight: 5, importance: 4 },
   arts: { maxDefault: 1, repeatWeight: 4, importance: 5 },
 };
 
-const NO_REPEAT_ADJACENT = new Set<StopType>(['coffee', 'restaurant', 'bar', 'outdoors', 'arts', 'dessert', 'activity']);
+const NO_REPEAT_ADJACENT = new Set<StopType>(['coffee', 'restaurant', 'bar', 'outdoors', 'arts', 'dessert', 'activity', 'attraction']);
 const CHAIN_NAMES = ['dunkin', 'starbucks', 'mcdonald', 'burger king', 'subway', 'chipotle', 'taco bell'];
 
 const parseMinutes = (time: string) => {
@@ -110,6 +111,7 @@ export const orderAllocation = (allocationTokens: StopType[], startTime: string,
     if (type === 'restaurant') return Math.floor(total * 0.5);
     if (type === 'shopping') return Math.floor(total * 0.45);
     if (type === 'outdoors') return startsLate ? Math.floor(total * 0.75) : Math.floor(total * 0.35);
+    if (type === 'attraction') return Math.floor(total * 0.55);
     if (type === 'activity' || type === 'arts') return Math.floor(total * 0.6);
     return Math.floor(total * 0.55);
   };

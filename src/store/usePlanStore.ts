@@ -43,7 +43,13 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const origin = input.startLat != null && input.startLng != null ? { lat: input.startLat, lng: input.startLng } : undefined;
       console.log('[plan] create_start', { city: input.city, origin, interests: input.preferences.interests, stopCount: input.stopCount });
       const planId = Crypto.randomUUID();
-      const { places, warnings } = await provider.search(input.city, input.preferences.interests, origin, input.stopCount);
+      const { places, warnings } = await provider.search(
+        input.city,
+        input.preferences.interests,
+        origin,
+        input.stopCount,
+        { transport: input.transport, maxTravelMinutes: input.preferences.maxTravelMinutes },
+      );
       console.log('[plan] candidates_loaded', { count: places.length, city: input.city });
       const stops = await generateStops(planId, input, places, routing);
       console.log('[plan] generated', {
@@ -100,7 +106,13 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const existing = get().stopsByPlan[planId] || [];
     const locked = existing.filter((s) => s.locked === 1);
     const origin = input.startLat != null && input.startLng != null ? { lat: input.startLat, lng: input.startLng } : undefined;
-    const { places, warnings } = await provider.search(input.city, input.preferences.interests, origin, input.stopCount);
+    const { places, warnings } = await provider.search(
+      input.city,
+      input.preferences.interests,
+      origin,
+      input.stopCount,
+      { transport: input.transport, maxTravelMinutes: input.preferences.maxTravelMinutes },
+    );
     let stops = await generateStops(planId, input, places, routing);
     console.log('[plan] regenerated', {
       requestedStopCount: input.stopCount,

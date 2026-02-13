@@ -1,7 +1,7 @@
 export type GroupType = 'Date' | 'Family' | 'Friends';
 export type TransportType = 'walk' | 'drive';
 export type BudgetType = '$' | '$$' | '$$$';
-export type StopType = 'coffee' | 'restaurant' | 'bar' | 'dessert' | 'activity' | 'outdoors' | 'shopping' | 'arts';
+export type StopType = 'coffee' | 'restaurant' | 'bar' | 'dessert' | 'activity' | 'outdoors' | 'shopping' | 'arts' | 'attraction';
 
 export interface PlanPreferences {
   interests: string[];
