@@ -1,4 +1,5 @@
 import { PlaceCandidate, StopType, TransportType, WizardInput } from '@/types/models';
+import { budgetScoreAdjustment, resolvePlaceTier } from '@/utils/priceTier';
 
 interface StopTypeRule {
   maxDefault: number;
@@ -46,15 +47,6 @@ const deterministicIndex = (seed: string, size: number) => {
     hash |= 0;
   }
   return Math.abs(hash) % size;
-};
-
-const budgetPenalty = (candidateBudget: string | undefined, targetBudget: string) => {
-  if (!candidateBudget || candidateBudget === 'Unknown') return 0;
-  const rank = (value: string) => (value === '$' ? 1 : value === '$$' ? 2 : value === '$$$' ? 3 : 2);
-  const diff = Math.abs(rank(candidateBudget) - rank(targetBudget));
-  if (diff === 0) return 2;
-  if (diff === 1) return 0;
-  return -2;
 };
 
 const detectChain = (name: string) => {
@@ -194,7 +186,10 @@ export const selectPlaceForToken = ({
       let score = 10;
       score += candidate.stopType === token ? 8 : -6;
       score += (candidate.rating || 0) * 1.5;
-      score += budgetPenalty(candidate.costLevel, input.budget);
+      const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
+      const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
+      if (budgetScore <= -900) return { candidate, score: -999 };
+      score += budgetScore;
       if (candidate.openNow) score += 2;
       if (input.preferences.mustInclude && (name.includes(input.preferences.mustInclude.toLowerCase()) || address.includes(input.preferences.mustInclude.toLowerCase()))) {
         score += 4;

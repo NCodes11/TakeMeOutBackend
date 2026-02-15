@@ -48,7 +48,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         input.preferences.interests,
         origin,
         input.stopCount,
-        { transport: input.transport, maxTravelMinutes: input.preferences.maxTravelMinutes },
+        { transport: input.transport, maxTravelMinutes: input.preferences.maxTravelMinutes, stopCount: input.stopCount },
       );
       console.log('[plan] candidates_loaded', { count: places.length, city: input.city });
       const stops = await generateStops(planId, input, places, routing);
@@ -111,7 +111,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       input.preferences.interests,
       origin,
       input.stopCount,
-      { transport: input.transport, maxTravelMinutes: input.preferences.maxTravelMinutes },
+      { transport: input.transport, maxTravelMinutes: input.preferences.maxTravelMinutes, stopCount: input.stopCount },
     );
     let stops = await generateStops(planId, input, places, routing);
     console.log('[plan] regenerated', {

@@ -21,7 +21,7 @@ const defaultInput = (city: string): WizardInput => ({
   transport: 'drive',
   budget: '$$',
   preferences: {
-    interests: ['coffee', 'activity', 'outdoors'],
+    interests: [],
     avoid: [],
     mustInclude: '',
     maxTravelMinutes: 30,
@@ -56,14 +56,14 @@ export default function WizardScreen() {
   }, [params.city, params.originLat, params.originLng]);
 
   useEffect(() => {
-    if (location.mode !== 'live' || !location.coords) return;
+    if (!location.coords) return;
     setInput((prev) => ({
       ...prev,
       city: location.placeLabel || prev.city,
       startLat: location.coords?.latitude ?? prev.startLat,
       startLng: location.coords?.longitude ?? prev.startLng,
     }));
-  }, [location.coords, location.mode, location.placeLabel]);
+  }, [location.coords, location.placeLabel]);
 
   const toggleInterest = (name: string) =>
     setInput((p) => {
@@ -104,7 +104,12 @@ export default function WizardScreen() {
       <SegmentedButtons
         value={input.budget}
         onValueChange={(v) => setInput({ ...input, budget: v as BudgetType })}
-        buttons={[{ value: '$', label: '$' }, { value: '$$', label: '$$' }, { value: '$$$', label: '$$$' }]}
+        buttons={[
+          { value: '$', label: 'Up to $' },
+          { value: '$$', label: 'Up to $$' },
+          { value: '$$$', label: 'Up to $$$' },
+          { value: '$$$$', label: 'Up to $$$$' },
+        ]}
       />
       <Text variant="titleSmall" style={styles.sectionTitle}>Stop types</Text>
       <Text variant="bodySmall" style={styles.helperText}>Choose where your plan should go. Restaurants appear only if selected.</Text>
@@ -119,10 +124,13 @@ export default function WizardScreen() {
           </Chip>
         ))}
       </ScrollView>
+      {input.preferences.interests.length === 0 ? (
+        <Text variant="bodySmall" style={styles.emptyHint}>Select at least one stop type.</Text>
+      ) : null}
       <Text variant="titleSmall" style={styles.sectionTitle}>Number of Stops</Text>
-      <Text variant="bodySmall" style={styles.helperText}>Select between 1 and 6 stops.</Text>
+      <Text variant="bodySmall" style={styles.helperText}>Select between 2 and 8 stops.</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-        {[1, 2, 3, 4, 5, 6].map((count) => (
+        {[2, 3, 4, 5, 6, 7, 8].map((count) => (
           <Chip
             key={count}
             selected={input.stopCount === count}
@@ -147,13 +155,18 @@ export default function WizardScreen() {
         loading={loading}
         disabled={loading || !input.city.trim() || input.preferences.interests.length === 0}
         onPress={async () => {
+          const fresh = await location.refreshLocation().catch(() => ({ coords: location.coords, placeLabel: location.placeLabel }));
+          const lat = fresh.coords?.latitude ?? input.startLat;
+          const lng = fresh.coords?.longitude ?? input.startLng;
+          const city = fresh.placeLabel || input.city;
+          const payload: WizardInput = { ...input, city, startLat: lat, startLng: lng };
           console.log('[plan] wizard_submit', {
-            city: input.city,
-            origin: { lat: input.startLat, lng: input.startLng },
-            stopCount: input.stopCount,
-            selectedTypes: input.preferences.interests,
+            city,
+            origin: { lat, lng },
+            stopCount: payload.stopCount,
+            selectedTypes: payload.preferences.interests,
           });
-          const id = await createPlan(input);
+          const id = await createPlan(payload);
           router.replace(`/generated/${id}`);
         }}
       >
@@ -196,5 +209,9 @@ const styles = StyleSheet.create({
   errorText: {
     color: palette.danger,
     marginTop: spacing.xs,
+  },
+  emptyHint: {
+    color: palette.danger,
+    marginTop: -spacing.xs,
   },
 });

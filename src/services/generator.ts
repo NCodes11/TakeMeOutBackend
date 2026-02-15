@@ -27,7 +27,7 @@ export const generateStops = async (
   if (selectedStopTypes.length === 0) throw new Error('Select at least one stop type to generate a plan.');
   const totalMinutes = parseMinutes(input.endTime) - parseMinutes(input.startTime);
   if (totalMinutes <= 0) throw new Error('End time must be after start time.');
-  const requestedCount = Math.max(1, Math.min(6, Math.floor(input.stopCount || 1)));
+  const requestedCount = Math.max(2, Math.min(8, Math.floor(input.stopCount || 3)));
 
   const allocation = buildStopAllocation(selectedStopTypes, requestedCount);
   const orderedTokens = enforceCapsAndAdjacency(orderAllocation(allocation, input.startTime, input.endTime));

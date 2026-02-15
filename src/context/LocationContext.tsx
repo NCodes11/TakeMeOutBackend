@@ -16,8 +16,8 @@ interface AppLocationState {
 
 interface LocationContextValue extends AppLocationState {
   setMode: (mode: LocationMode) => Promise<void>;
-  setManualLocation: (query: string) => Promise<void>;
-  refreshLocation: () => Promise<void>;
+  setManualLocation: (query: string) => Promise<{ coords: { latitude: number; longitude: number }; placeLabel: string }>;
+  refreshLocation: () => Promise<{ coords: { latitude: number; longitude: number } | null; placeLabel: string }>;
 }
 
 const STORAGE_KEY = 'take-me-out.manual-location';
@@ -102,30 +102,33 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     const permission = await Location.requestForegroundPermissionsAsync();
     const permissionState = toPermission(permission.status);
     setState((prev) => ({ ...prev, permission: permissionState }));
-    if (permissionState !== 'granted') return;
+    if (permissionState !== 'granted') return { coords: null, placeLabel: '' };
     const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    await setCoordsFromLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+    const coords = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+    await setCoordsFromLocation(coords);
+    const reverse = await Location.reverseGeocodeAsync(coords);
+    return { coords, placeLabel: formatPlaceLabel(reverse[0]) };
   }, [setCoordsFromLocation]);
 
   const refreshLocation = useCallback(async () => {
     if (state.mode === 'live') {
-      await refreshLive();
-      return;
+      return refreshLive();
     }
-    if (!state.placeLabel) return;
+    if (!state.placeLabel) return { coords: state.coords, placeLabel: state.placeLabel };
     const results = await Location.geocodeAsync(state.placeLabel);
     const first = results[0];
-    if (!first) return;
+    if (!first) return { coords: state.coords, placeLabel: state.placeLabel };
     const coords = { latitude: first.latitude, longitude: first.longitude };
     console.log('[location] manual_refresh', { placeLabel: state.placeLabel, coords });
     const next = { coords, placeLabel: state.placeLabel, updatedAt: Date.now() };
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     setState((prev) => ({ ...prev, ...next }));
+    return { coords, placeLabel: state.placeLabel };
   }, [refreshLive, state.mode, state.placeLabel]);
 
   const setManualLocation = useCallback(async (query: string) => {
     const trimmed = query.trim();
-    if (!trimmed) return;
+    if (!trimmed) throw new Error('Enter a location first.');
     const geocoded = await Location.geocodeAsync(trimmed);
     const first = geocoded[0];
     if (!first) throw new Error('Unable to geocode that manual location.');
@@ -140,6 +143,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
       mode: 'manual',
     }));
     stopWatching();
+    return { coords, placeLabel: trimmed };
   }, [stopWatching]);
 
   const setMode = useCallback(async (mode: LocationMode) => {

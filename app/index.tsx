@@ -1,8 +1,8 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Card, SegmentedButtons, Text, TextInput } from 'react-native-paper';
-import { AppCard, AppScreen, GhostButton, PrimaryButton, SecondaryButton } from '@/components/ui';
+import { Alert, StyleSheet, View } from 'react-native';
+import { Card, Modal, Portal, SegmentedButtons, Text, TextInput } from 'react-native-paper';
+import { AppCard, AppScreen, GhostButton, PrimaryButton } from '@/components/ui';
 import { useLocation } from '@/context/LocationContext';
 import { palette, spacing } from '@/theme/appTheme';
 
@@ -11,6 +11,7 @@ export default function HomeScreen() {
   const [manualInput, setManualInput] = useState(placeLabel);
   const [pending, setPending] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
+  const [manualPromptVisible, setManualPromptVisible] = useState(false);
 
   useEffect(() => {
     if (mode === 'manual') setManualInput(placeLabel);
@@ -24,23 +25,69 @@ export default function HomeScreen() {
     }, [mode, refreshLocation]),
   );
 
-  const onRefresh = async () => {
+  const goToWizard = (next: { latitude: number; longitude: number }, label: string) => {
+    router.push({
+      pathname: '/wizard',
+      params: {
+        city: label,
+        originLat: next.latitude.toString(),
+        originLng: next.longitude.toString(),
+      },
+    });
+  };
+
+  const proceedWithLive = async () => {
+    await setMode('live');
+    const fresh = await refreshLocation();
+    if (!fresh.coords) throw new Error('Current location unavailable. Choose a manual location.');
+    goToWizard(fresh.coords, fresh.placeLabel || placeLabel || 'Current location');
+  };
+
+  const proceedWithManual = async (query: string) => {
+    const fresh = await setManualLocation(query);
+    goToWizard(fresh.coords, fresh.placeLabel);
+  };
+
+  const onStartPlan = async () => {
     setPending(true);
     setDetectError(null);
     try {
-      await refreshLocation();
+      if (mode === 'manual' && manualInput.trim()) {
+        await proceedWithManual(manualInput);
+        return;
+      }
+      if (permission === 'granted' && coords) {
+        goToWizard(coords, placeLabel || 'Current location');
+        return;
+      }
+      Alert.alert('Choose location', 'Select how you want to start your plan.', [
+        {
+          text: 'Use my current location',
+          onPress: () => {
+            proceedWithLive().catch((e) => setDetectError(e instanceof Error ? e.message : 'Unable to use live location.'));
+          },
+        },
+        {
+          text: 'Choose a different location',
+          onPress: () => {
+            setManualPromptVisible(true);
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
     } catch (e) {
-      setDetectError(e instanceof Error ? e.message : 'Unable to refresh location.');
+      setDetectError(e instanceof Error ? e.message : 'Unable to start plan.');
     } finally {
       setPending(false);
     }
   };
 
-  const onSetManual = async () => {
+  const onSubmitManualPrompt = async () => {
     setPending(true);
     setDetectError(null);
     try {
-      await setManualLocation(manualInput);
+      await proceedWithManual(manualInput);
+      setManualPromptVisible(false);
     } catch (e) {
       setDetectError(e instanceof Error ? e.message : 'Unable to set manual location.');
     } finally {
@@ -67,13 +114,13 @@ export default function HomeScreen() {
           <Text variant="bodySmall" style={styles.helperText}>
             {mode === 'live'
               ? `Live GPS • ${updatedAt ? `updated ${new Date(updatedAt).toLocaleTimeString()}` : 'waiting for fix'}`
-              : 'Manual mode • enter city or address below'}
+              : 'Manual mode • Start Plan will use the location you enter below'}
           </Text>
           <TextInput
             label="City or location"
             placeholder="Orlando, FL"
-            value={mode === 'manual' ? manualInput : placeLabel}
-            onChangeText={mode === 'manual' ? setManualInput : undefined}
+            value={manualInput}
+            onChangeText={setManualInput}
             editable={mode === 'manual'}
             mode="outlined"
             style={styles.input}
@@ -86,33 +133,34 @@ export default function HomeScreen() {
           </Text>
           {detectError ? <Text style={styles.errorText}>{detectError}</Text> : null}
           <View style={styles.row}>
-            {mode === 'manual' ? (
-              <SecondaryButton loading={pending} disabled={pending || !manualInput.trim()} onPress={onSetManual}>
-                Set Manual Location
-              </SecondaryButton>
-            ) : (
-              <SecondaryButton loading={pending} disabled={pending} onPress={onRefresh}>
-                Refresh Location
-              </SecondaryButton>
-            )}
             <PrimaryButton
-              onPress={() =>
-                router.push({
-                  pathname: '/wizard',
-                  params: {
-                    city: placeLabel,
-                    originLat: coords?.latitude?.toString(),
-                    originLng: coords?.longitude?.toString(),
-                  },
-                })
-              }
-              disabled={!coords || !placeLabel}
+              onPress={onStartPlan}
+              loading={pending}
+              disabled={pending}
             >
               Start Plan
             </PrimaryButton>
           </View>
         </Card.Content>
       </AppCard>
+      <Portal>
+        <Modal visible={manualPromptVisible} onDismiss={() => setManualPromptVisible(false)} contentContainerStyle={styles.modal}>
+          <Text variant="titleMedium" style={styles.modalTitle}>Choose a different location</Text>
+          <TextInput
+            label="City or address"
+            placeholder="Orlando, FL"
+            value={manualInput}
+            onChangeText={setManualInput}
+            mode="outlined"
+          />
+          <View style={styles.modalActions}>
+            <GhostButton onPress={() => setManualPromptVisible(false)}>Cancel</GhostButton>
+            <PrimaryButton onPress={onSubmitManualPrompt} loading={pending} disabled={!manualInput.trim() || pending}>
+              Continue
+            </PrimaryButton>
+          </View>
+        </Modal>
+      </Portal>
       <View style={styles.links}>
         <GhostButton onPress={() => router.push('/saved')}>Saved Plans</GhostButton>
         <GhostButton onPress={() => router.push('/settings')}>Settings</GhostButton>
@@ -140,6 +188,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
     marginTop: spacing.md,
+  },
+  modal: {
+    margin: spacing.lg,
+    padding: spacing.lg,
+    borderRadius: 16,
+    backgroundColor: palette.surface,
+    gap: spacing.md,
+  },
+  modalTitle: {
+    color: palette.text,
+    fontWeight: '700',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
   },
   links: {
     flexDirection: 'row',

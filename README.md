@@ -22,6 +22,26 @@ Take Me Out is an iPhone-ready itinerary planner for dates/family/friends with l
 - `npm run lint`
 - `npm run format`
 
+## Setting up Google Places API key
+1. Create a local env file (never commit your real key):
+   - `cp .env.example .env`
+2. Add your key in `.env`:
+   - `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=...`
+3. Restart Expo:
+   - `npm run start -c`
+
+The places provider reads:
+- `process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` (primary)
+- `process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY` (legacy fallback)
+
+If you use EAS builds, set the same key as a secret:
+- `eas secret:create --scope project --name EXPO_PUBLIC_GOOGLE_MAPS_API_KEY --value <your-key>`
+
+Google Cloud APIs to enable:
+- Places API
+- Geocoding API
+- (Optional) Distance Matrix API
+
 ## Figma plugin usage
 1. Build plugin TS to JS (e.g. via `tsc` in `figma-plugin`) so output is `figma-plugin/dist/code.js`.
 2. Open Figma → Plugins → Development → Import plugin from manifest.

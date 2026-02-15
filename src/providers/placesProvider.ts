@@ -59,6 +59,7 @@ interface GooglePlaceDetailsResponse {
 export interface PlacesSearchOptions {
   transport?: TransportType;
   maxTravelMinutes?: number;
+  stopCount?: number;
 }
 
 export interface PlacesProvider {
@@ -103,10 +104,17 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => 
 };
 
 const buildRadiusSteps = (options?: PlacesSearchOptions) => {
+  const stopCount = Math.max(2, Math.min(8, Math.floor(options?.stopCount || 3)));
+  const byStopCount =
+    stopCount <= 3 ? [8000, 12000, 20000] :
+    stopCount <= 6 ? [12000, 20000, 30000] :
+    [20000, 30000, 45000];
   const speed = options?.transport === 'walk' ? 4.5 : 35;
   const minutes = Math.max(10, options?.maxTravelMinutes || 20);
   const baseMeters = Math.max(10000, Math.min(MAX_RADIUS_METERS, Math.round(((speed * minutes) / 60) * 1000)));
-  const steps = [baseMeters, 20000, 40000, 60000];
+  const speedScale = options?.transport === 'walk' ? 0.75 : 1;
+  const scaledByCount = byStopCount.map((value) => Math.round(value * speedScale));
+  const steps = [baseMeters, ...scaledByCount, 60000];
   return Array.from(new Set(steps.filter((value) => value <= MAX_RADIUS_METERS))).sort((a, b) => a - b);
 };
 
@@ -117,8 +125,9 @@ const MAJOR_ATTRACTION_BRAND_TERMS = ['disney', 'universal', 'seaworld', 'icon p
 const toCostLevel = (priceLevel?: number): string => {
   if (typeof priceLevel !== 'number') return 'Unknown';
   if (priceLevel <= 1) return '$';
-  if (priceLevel <= 3) return '$$';
-  return '$$$';
+  if (priceLevel === 2) return '$$';
+  if (priceLevel === 3) return '$$$';
+  return '$$$$';
 };
 
 export class NominatimOverpassProvider implements PlacesProvider {
@@ -131,10 +140,10 @@ export class NominatimOverpassProvider implements PlacesProvider {
   ): Promise<{ places: PlaceCandidate[]; warnings: string[] }> {
     const selectedStopTypes = normalizeSelectedStopTypes(interests);
     const requestedStopTypes: StopType[] = selectedStopTypes.length > 0 ? selectedStopTypes : ['activity', 'outdoors'];
-    const targetCount = Math.max(1, Math.min(6, Math.floor(desiredCount)));
+    const targetCount = Math.max(2, Math.min(8, Math.floor(desiredCount)));
     const maxResults = Math.max(targetCount * 8, 24);
     const warnings: string[] = [];
-    const googleApiKey = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
+    const googleApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
     const cacheKey = origin
       ? `nomi-${origin.lat.toFixed(3)}-${origin.lng.toFixed(3)}-${requestedStopTypes.join('-')}`
       : `nomi-${city.toLowerCase()}-${requestedStopTypes.join('-')}`;
@@ -704,9 +713,10 @@ out body 80;`;
 
   private costLevelFromTags(tags: Record<string, string>) {
     const value = tags.price_range || '';
+    if (value.includes('$$$$')) return '$$$$';
     if (value.includes('$$$')) return '$$$';
     if (value.includes('$$')) return '$$';
-    return '$$';
+    return '$';
   }
 
   private addressFromTags(tags: Record<string, string>, city: string) {
