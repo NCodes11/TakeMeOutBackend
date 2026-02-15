@@ -105,10 +105,9 @@ export default function WizardScreen() {
         value={input.budget}
         onValueChange={(v) => setInput({ ...input, budget: v as BudgetType })}
         buttons={[
-          { value: '$', label: 'Up to $' },
-          { value: '$$', label: 'Up to $$' },
-          { value: '$$$', label: 'Up to $$$' },
-          { value: '$$$$', label: 'Up to $$$$' },
+          { value: '$', label: '$' },
+          { value: '$$', label: '$$' },
+          { value: '$$$', label: '$$$' },
         ]}
       />
       <Text variant="titleSmall" style={styles.sectionTitle}>Stop types</Text>

@@ -3,8 +3,7 @@ import { BudgetType } from '@/types/models';
 export const budgetToMaxTier = (budget: BudgetType): number => {
   if (budget === '$') return 1;
   if (budget === '$$') return 2;
-  if (budget === '$$$') return 3;
-  return 4;
+  return 3;
 };
 
 export const priceLevelToTier = (priceLevel?: number): number | null => {
