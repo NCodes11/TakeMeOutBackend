@@ -19,12 +19,54 @@ const TYPE_RULES: Record<StopType, StopTypeRule> = {
   arts: { maxDefault: 1, repeatWeight: 4, importance: 5 },
 };
 
-const NO_REPEAT_ADJACENT = new Set<StopType>(['coffee', 'restaurant', 'bar', 'outdoors', 'arts', 'dessert', 'activity', 'attraction']);
+const NO_REPEAT_ADJACENT = new Set<StopType>([
+  'coffee',
+  'restaurant',
+  'bar',
+  'outdoors',
+  'arts',
+  'dessert',
+  'activity',
+  'attraction',
+]);
+
 const CHAIN_NAMES = ['dunkin', 'starbucks', 'mcdonald', 'burger king', 'subway', 'chipotle', 'taco bell'];
+
+type Minutes = number;
+
+interface DurationRule {
+  min: Minutes;
+  max: Minutes;
+  weight: number;
+}
+
+/**
+ * Duration policy by stop type.
+ * The scheduler uses weights to distribute time across stops, then clamps to min/max.
+ */
+const DURATION_RULES: Record<StopType, DurationRule> = {
+  coffee: { min: 15, max: 35, weight: 1 },
+  dessert: { min: 20, max: 45, weight: 1.2 },
+  bar: { min: 30, max: 75, weight: 1.5 },
+  restaurant: { min: 60, max: 110, weight: 2.5 },
+  shopping: { min: 45, max: 120, weight: 2.0 },
+  outdoors: { min: 60, max: 150, weight: 3.0 },
+  arts: { min: 60, max: 150, weight: 3.0 },
+  activity: { min: 75, max: 180, weight: 3.5 },
+  attraction: { min: 75, max: 180, weight: 3.5 },
+};
+
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 const parseMinutes = (time: string) => {
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;
+};
+
+const minutesToTime = (minutes: number) => {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 };
 
 const estimatedSpeedKmh = (transport: TransportType) => (transport === 'walk' ? 4.5 : 35);
@@ -57,6 +99,12 @@ const detectChain = (name: string) => {
   return first || normalized;
 };
 
+/**
+ * Generates a stop-type sequence (tokens) of length `numberOfStops` based on:
+ * - the user-selected stop types
+ * - per-type importance (which types must appear)
+ * - per-type repeat weight and caps (which types can repeat more)
+ */
 export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: number): StopType[] => {
   const uniqueTypes = Array.from(new Set(selectedTypes));
   const target = Math.max(1, numberOfStops);
@@ -88,6 +136,12 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
   return allocation.slice(0, target);
 };
 
+/**
+ * Orders a token sequence across the user's day window so common patterns make sense:
+ * - coffee near the beginning
+ * - bars near the end
+ * - meals and activities in the middle
+ */
 export const orderAllocation = (allocationTokens: StopType[], startTime: string, endTime: string): StopType[] => {
   const tokens = [...allocationTokens];
   if (tokens.length <= 1) return tokens;
@@ -116,6 +170,10 @@ export const orderAllocation = (allocationTokens: StopType[], startTime: string,
   return enforceCapsAndAdjacency(ordered);
 };
 
+/**
+ * Applies simple sequencing rules to avoid consecutive duplicates for certain types
+ * (e.g. two restaurants back-to-back) by swapping a later token forward when possible.
+ */
 export const enforceCapsAndAdjacency = (tokens: StopType[]): StopType[] => {
   if (tokens.length <= 1) return tokens;
   const unique = new Set(tokens);
@@ -157,6 +215,16 @@ interface SelectionContext {
   input: WizardInput;
 }
 
+/**
+ * Scores and selects a place candidate for a given stop-type token.
+ * Scoring considers:
+ * - token match and ratings
+ * - budget compatibility
+ * - "open now" preference
+ * - must-include / avoid text filters
+ * - travel constraints from the previously selected place
+ * - chain variety to avoid repeating the same brand
+ */
 export const selectPlaceForToken = ({
   token,
   tokenIndex,
@@ -177,21 +245,30 @@ export const selectPlaceForToken = ({
     .map((candidate) => {
       const name = candidate.name.toLowerCase();
       const address = candidate.address.toLowerCase();
+
       if (input.preferences.avoid.some((deny) => name.includes(deny.toLowerCase()) || address.includes(deny.toLowerCase()))) {
         return { candidate, score: -999 };
       }
       if (!onlyOneType && candidate.stopType === 'coffee' && coffeeAlreadyUsed) {
         return { candidate, score: -999 };
       }
+
       let score = 10;
       score += candidate.stopType === token ? 8 : -6;
       score += (candidate.rating || 0) * 1.5;
+
       const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
       const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
       if (budgetScore <= -900) return { candidate, score: -999 };
       score += budgetScore;
+
       if (candidate.openNow) score += 2;
-      if (input.preferences.mustInclude && (name.includes(input.preferences.mustInclude.toLowerCase()) || address.includes(input.preferences.mustInclude.toLowerCase()))) {
+
+      if (
+        input.preferences.mustInclude &&
+        (name.includes(input.preferences.mustInclude.toLowerCase()) ||
+          address.includes(input.preferences.mustInclude.toLowerCase()))
+      ) {
         score += 4;
       }
 
@@ -215,4 +292,124 @@ export const selectPlaceForToken = ({
   const top = ranked.slice(0, Math.min(3, ranked.length));
   const pickIndex = deterministicIndex(`${seed}-${token}-${tokenIndex}`, top.length);
   return top[pickIndex].candidate;
+};
+
+export interface ScheduledStop extends PlaceCandidate {
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  travelMinutesFromPrev: number;
+}
+
+/**
+ * Assigns a timeline to an ordered list of places across the user-defined time window.
+ * It:
+ * - estimates travel minutes between consecutive stops
+ * - allocates available on-site time across stops using stop-type weights and min/max caps
+ * - returns per-stop start/end times and durations
+ */
+export const scheduleItinerary = (
+  orderedStops: PlaceCandidate[],
+  input: WizardInput,
+  startTime: string,
+  endTime: string,
+): ScheduledStop[] => {
+  if (orderedStops.length === 0) return [];
+
+  const start = parseMinutes(startTime);
+  const end = parseMinutes(endTime);
+  const totalWindow = Math.max(0, end - start);
+  if (totalWindow <= 0) return [];
+
+  const maxTravel = Math.max(5, input.preferences.maxTravelMinutes || 30);
+
+  // Estimate travel time between consecutive stops and cap each leg.
+  const travelMins: number[] = orderedStops.map((_, i) => {
+    if (i === 0) return 0;
+    const prev = orderedStops[i - 1];
+    const curr = orderedStops[i];
+    const dist = haversineKm(prev.lat, prev.lng, curr.lat, curr.lng);
+    const eta = (dist / estimatedSpeedKmh(input.transport)) * 60;
+    return clamp(Math.round(eta), 0, maxTravel);
+  });
+
+  const totalTravel = travelMins.reduce((a, b) => a + b, 0);
+  const usable = Math.max(0, totalWindow - totalTravel);
+
+  // Convert stop types into scheduling weights (with a reasonable fallback).
+  const weights = orderedStops.map((s) => DURATION_RULES[s.stopType]?.weight ?? 2.0);
+  const weightSum = weights.reduce((a, b) => a + b, 0) || 1;
+
+  // Allocate usable minutes proportionally, then clamp to each type's duration bounds.
+  let durations = orderedStops.map((s, i) => {
+    const rule = DURATION_RULES[s.stopType] ?? { min: 30, max: 90, weight: 2.0 };
+    const target = Math.round((usable * weights[i]) / weightSum);
+    return clamp(target, rule.min, rule.max);
+  });
+
+  // Adjust durations so the total matches the usable window while staying within bounds.
+  const normalizeTo = (targetTotal: number) => {
+    const currentTotal = durations.reduce((a, b) => a + b, 0);
+    let diff = targetTotal - currentTotal;
+    if (diff === 0) return;
+
+    const indices = durations
+      .map((_, i) => i)
+      .sort((a, b) => (weights[b] - weights[a]) || a - b);
+
+    for (let pass = 0; pass < 12 && diff !== 0; pass += 1) {
+      let changed = false;
+
+      for (const i of indices) {
+        const rule = DURATION_RULES[orderedStops[i].stopType] ?? { min: 30, max: 90, weight: 2.0 };
+
+        if (diff < 0) {
+          const roomDown = durations[i] - rule.min;
+          if (roomDown <= 0) continue;
+          const take = Math.min(roomDown, Math.abs(diff));
+          durations[i] -= take;
+          diff += take;
+          changed = true;
+        } else {
+          const roomUp = rule.max - durations[i];
+          if (roomUp <= 0) continue;
+          const give = Math.min(roomUp, diff);
+          durations[i] += give;
+          diff -= give;
+          changed = true;
+        }
+
+        if (diff === 0) break;
+      }
+
+      if (!changed) break;
+    }
+  };
+
+  normalizeTo(usable);
+
+  // Build the final timeline by walking forward through travel legs and on-site durations.
+  let cursor = start;
+  const scheduled: ScheduledStop[] = [];
+
+  for (let i = 0; i < orderedStops.length; i += 1) {
+    const travel = travelMins[i];
+    cursor += travel;
+
+    const dur = durations[i];
+    const stopStart = cursor;
+    const stopEnd = cursor + dur;
+
+    scheduled.push({
+      ...orderedStops[i],
+      travelMinutesFromPrev: travel,
+      durationMinutes: dur,
+      startTime: minutesToTime(stopStart),
+      endTime: minutesToTime(stopEnd),
+    });
+
+    cursor = stopEnd;
+  }
+
+  return scheduled;
 };
