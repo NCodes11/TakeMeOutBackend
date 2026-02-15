@@ -14,8 +14,8 @@ export default function HomeScreen() {
   const [manualPromptVisible, setManualPromptVisible] = useState(false);
 
   useEffect(() => {
-    if (mode === 'manual') setManualInput(placeLabel);
-  }, [mode, placeLabel]);
+    if (placeLabel) setManualInput(placeLabel);
+  }, [placeLabel]);
 
   useFocusEffect(
     useCallback(() => {
