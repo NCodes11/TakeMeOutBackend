@@ -22,6 +22,7 @@ export interface CategoryEvalResult {
 }
 
 export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
+  // Policies balance strict type checks with keyword heuristics from names/addresses.
   outdoors: {
     allowTypes: [
       'park',
@@ -231,6 +232,7 @@ export const evaluateCategoryCandidate = (stopType: StopType, place: CategoryEva
   if (hasDenyType) score -= 2;
   if (score < 2) reasons.push('score_below_threshold');
 
+  // Hard reject if explicit deny signal exists or there is no positive/allowed signal at all.
   const hardRejected = hasDenyType || hasDenyKeyword || (!hasAllowType && !hasPositiveKeyword);
   return {
     accepted: !hardRejected && score >= 2,

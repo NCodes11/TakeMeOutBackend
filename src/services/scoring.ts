@@ -2,6 +2,7 @@ import { PlaceCandidate, PlanPreferences } from '@/types/models';
 import { normalizeSelectedStopTypes } from '@/constants/stopTypes';
 
 export const scorePlace = (place: PlaceCandidate, preferences: PlanPreferences): number => {
+  // Lightweight relevance scorer used by selection/ranking heuristics.
   let score = 0;
   const selectedTypes = normalizeSelectedStopTypes(preferences.interests);
   if (selectedTypes.includes(place.stopType)) score += 5;

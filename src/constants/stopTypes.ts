@@ -20,6 +20,7 @@ export const STOP_TYPE_OPTIONS: StopTypeOption[] = [
 ];
 
 const LEGACY_LABEL_TO_TYPE: Record<string, StopType> = {
+  // Supports historical labels persisted in older plans/preferences.
   food: 'restaurant',
   'coffee/dessert': 'coffee',
   outdoors: 'outdoors',

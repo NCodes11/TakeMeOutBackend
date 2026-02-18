@@ -20,12 +20,14 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       if (mode !== 'live') return () => undefined;
+      // Refresh on focus so "Start Plan" launches with current coordinates.
       refreshLocation().catch(() => undefined);
       return () => undefined;
     }, [mode, refreshLocation]),
   );
 
   const goToWizard = (next: { latitude: number; longitude: number }, label: string) => {
+    // Pass city + origin coords so wizard can prefill and immediately search nearby.
     router.push({
       pathname: '/wizard',
       params: {
@@ -53,6 +55,7 @@ export default function HomeScreen() {
     setDetectError(null);
     try {
       if (mode === 'manual' && manualInput.trim()) {
+        // Manual mode uses exactly what user typed, then geocodes before navigation.
         await proceedWithManual(manualInput);
         return;
       }
@@ -60,6 +63,7 @@ export default function HomeScreen() {
         goToWizard(coords, placeLabel || 'Current location');
         return;
       }
+      // If live GPS is unavailable, prompt for a fallback path instead of blocking.
       Alert.alert('Choose location', 'Select how you want to start your plan.', [
         {
           text: 'Use my current location',

@@ -8,6 +8,7 @@ import { palette, spacing } from '@/theme/appTheme';
 
 export const RouteMap = ({ stops }: { stops: Stop[] }) => {
   const mapRef = useRef<MapView | null>(null);
+  // Ignore stops with missing coordinates so the map never crashes on partial data.
   const points = stops
     .filter((s) => hasValidCoords({ lat: s.lat, lng: s.lng }))
     .map((s) => ({ latitude: s.lat, longitude: s.lng, title: s.name, description: s.category, order: s.order }));
@@ -39,6 +40,7 @@ export const RouteMap = ({ stops }: { stops: Stop[] }) => {
 
   useEffect(() => {
     if (!mapRef.current || coordinates.length < 2) return;
+    // Fit all markers after render for a tighter default camera frame.
     mapRef.current.fitToCoordinates(coordinates, {
       edgePadding: { top: 48, right: 48, bottom: 48, left: 48 },
       animated: true,

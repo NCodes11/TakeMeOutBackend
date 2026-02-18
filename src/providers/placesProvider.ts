@@ -102,6 +102,7 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => 
 };
 
 const buildRadiusSteps = (options?: PlacesSearchOptions) => {
+  // Radius grows with requested stop count and transport speed to avoid sparse result sets.
   const stopCount = Math.max(2, Math.min(8, Math.floor(options?.stopCount || 3)));
   const byStopCount =
     stopCount <= 3 ? [8000, 12000, 20000] : stopCount <= 6 ? [12000, 20000, 30000] : [20000, 30000, 45000];
@@ -147,6 +148,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
     desiredCount = 3,
     options?: PlacesSearchOptions,
   ): Promise<{ places: PlaceCandidate[]; warnings: string[] }> {
+    // Strategy: cache -> Google (if configured) -> OSM fallback, then dedupe + policy filter.
     const selectedStopTypes = normalizeSelectedStopTypes(interests);
     const requestedStopTypes: StopType[] = selectedStopTypes.length > 0 ? selectedStopTypes : ['activity', 'outdoors'];
 
@@ -207,6 +209,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
     }
 
     if (merged.length < maxResults) {
+      // Always keep an open-data fallback so search still works without Google quota/key.
       const openStreet = await this.searchViaOpenStreetMap(city, requestedStopTypes, origin, maxResults, warnings);
       merged.push(...openStreet);
     }
@@ -247,6 +250,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
     apiKey: string,
     options?: PlacesSearchOptions,
   ): Promise<PlaceCandidate[]> {
+    // Query each selected stop type independently so category balance survives scoring.
     const radiusSteps = buildRadiusSteps(options);
     const mode = options?.mode ?? 'plan';
 
@@ -378,6 +382,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
         const token = json.next_page_token;
         if (!token || all.length >= limit) break;
 
+        // Google requires a short delay before next_page_token is valid.
         await new Promise((res) => setTimeout(res, 1600));
 
         const next = new URL(url);
@@ -425,6 +430,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
     apiKey: string,
     options?: PlacesSearchOptions,
   ): Promise<PlaceCandidate[]> {
+    // Attractions run a broader query set and larger radii than other categories.
     const policy = CATEGORY_POLICIES.attraction;
     const merged = new Map<string, GoogleNearbyPlace>();
     const radiusSteps = options ? Array.from(new Set([...ATTRACTION_RADIUS_STEPS])) : ATTRACTION_RADIUS_STEPS;
@@ -531,6 +537,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
       let centerLng = origin?.lng;
 
       if (centerLat == null || centerLng == null) {
+        // Derive a city center first when user origin is missing.
         await waitIfNeeded();
         const geocode = await fetch(
           `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city)}&format=json&limit=1`,
@@ -578,6 +585,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
       if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
       return filtered.slice(0, maxResults);
     } catch {
+      // Final fallback when Overpass is unavailable/rate-limited.
       return this.searchViaNominatim(city, stopTypes, origin, maxResults, warnings);
     }
   }
@@ -743,6 +751,7 @@ out body 120;`;
   }
 
   private dedupePlaces(rows: PlaceCandidate[]): PlaceCandidate[] {
+    // Dedupe by provider id + rounded coordinates + normalized name for stable rerolls.
     const seen = new Set<string>();
     return rows.filter((row) => {
       const pid = row.providerId ? `pid:${row.providerId}` : '';

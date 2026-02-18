@@ -1,5 +1,6 @@
 import { RouteMap } from '@/components/RouteMap';
 import { StopCard } from '@/components/StopCard';
+import { FeedbackModal } from '@/components/FeedbackModal';
 import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { usePlanStore } from '@/store/usePlanStore';
 import { exportIcs, planCode, shareJson } from '@/utils/share';
@@ -23,6 +24,7 @@ export default function GeneratedPlanScreen() {
   const rerollStop = usePlanStore((s) => s.rerollStop);
 
   const [view, setView] = useState<'timeline' | 'list'>('timeline');
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
 
   const plan = plans.find((p) => p.id === id);
   const orderedStops = [...stops].sort((a, b) => a.order - b.order);
@@ -30,7 +32,8 @@ export default function GeneratedPlanScreen() {
   const derivedInput: WizardInput | null = useMemo(() => {
     if (!plan) return null;
 
-    let preferences: any = {};
+    // Rebuild a wizard-like payload so reroll uses the same constraints as the saved plan.
+    let preferences: Record<string, unknown> = {};
     try {
       preferences = plan.preferencesJSON ? JSON.parse(plan.preferencesJSON) : {};
     } catch {
@@ -107,6 +110,7 @@ export default function GeneratedPlanScreen() {
       ) : null}
 
       {view === 'timeline'
+        // Timeline uses richer stop cards; list mode is a compact management view.
         ? orderedStops.map((s) => (
             <StopCard
               key={s.id}
@@ -167,6 +171,8 @@ export default function GeneratedPlanScreen() {
         <SecondaryButton onPress={() => exportIcs(plan, stops)}>Export .ics</SecondaryButton>
       </View>
 
+      <PrimaryButton onPress={() => setFeedbackVisible(true)}>Finish Day</PrimaryButton>
+
       <AppCard>
         <Card.Content style={styles.codeWrap}>
           <Text variant="titleSmall" style={styles.codeTitle}>
@@ -175,6 +181,17 @@ export default function GeneratedPlanScreen() {
           <QRCode value={JSON.stringify({ planId: plan.id, code: planCode(plan) })} size={140} />
         </Card.Content>
       </AppCard>
+
+      <FeedbackModal
+        visible={feedbackVisible}
+        plan={plan}
+        stops={orderedStops}
+        onDismiss={() => setFeedbackVisible(false)}
+        onSubmitted={() => {
+          setFeedbackVisible(false);
+          router.push('/');
+        }}
+      />
     </AppScreen>
   );
 }

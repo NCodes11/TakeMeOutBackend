@@ -7,6 +7,7 @@ export const requestNotificationPermissions = async () => {
 };
 
 export const scheduleLeaveNowReminders = async (stops: Stop[]) => {
+  // Schedule each reminder for 15 minutes before stop start time.
   for (const stop of stops) {
     const [h, m] = stop.startTime.split(':').map(Number);
     const trigger = new Date();

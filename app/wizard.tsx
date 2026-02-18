@@ -10,6 +10,7 @@ import { BudgetType, GroupType, StopType, TransportType, WizardInput } from '@/t
 import { palette, spacing } from '@/theme/appTheme';
 
 const defaultInput = (city: string): WizardInput => ({
+  // Sensible defaults keep the flow fast for first-time users.
   city,
   date: new Date().toISOString().slice(0, 10),
   startTime: '09:00',
@@ -43,6 +44,7 @@ export default function WizardScreen() {
   const error = usePlanStore((s) => s.error);
 
   useEffect(() => {
+    // Accept origin coordinates passed from Home so place search can start near the user.
     const lat = params.originLat ? Number(params.originLat) : undefined;
     const lng = params.originLng ? Number(params.originLng) : undefined;
     const hasLat = typeof lat === 'number' && Number.isFinite(lat);
@@ -56,6 +58,7 @@ export default function WizardScreen() {
   }, [params.city, params.originLat, params.originLng]);
 
   useEffect(() => {
+    // Keep wizard city/origin synced with the latest resolved location label.
     if (!location.coords) return;
     setInput((prev) => ({
       ...prev,
@@ -154,6 +157,7 @@ export default function WizardScreen() {
         loading={loading}
         disabled={loading || !input.city.trim() || input.preferences.interests.length === 0}
         onPress={async () => {
+          // Refresh once at submit time so planning uses freshest available coordinates.
           const fresh = await location.refreshLocation().catch(() => ({ coords: location.coords, placeLabel: location.placeLabel }));
           const lat = fresh.coords?.latitude ?? input.startLat;
           const lng = fresh.coords?.longitude ?? input.startLng;

@@ -1,7 +1,8 @@
-import { useLocalSearchParams } from 'expo-router';
-import { useMemo } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useMemo, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 import { ActivityIndicator, Card, Text } from 'react-native-paper';
+import { FeedbackModal } from '@/components/FeedbackModal';
 import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { useLocation } from '@/context/LocationContext';
 import { usePlanStore } from '@/store/usePlanStore';
@@ -17,6 +18,7 @@ export default function TodayMode() {
   const plan = plans.find((p) => p.id === id);
   const next = stops[0];
   const routeDestination = stops[stops.length - 1];
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
 
   if (!next || !routeDestination) return <Text>No stop data</Text>;
 
@@ -30,6 +32,7 @@ export default function TodayMode() {
     ? { lat: routeDestination.lat, lng: routeDestination.lng }
     : null;
   const mode = plan?.transport === 'walk' ? 'w' : 'd';
+  // Build once from live origin + last stop destination for direct turn-by-turn handoff.
   const directionsUrl = useMemo(
     () => (origin && destination ? buildAppleMapsDirectionsUrl(origin, destination, mode) : null),
     [destination, mode, origin],
@@ -49,6 +52,7 @@ export default function TodayMode() {
   };
 
   let helperText = '';
+  // Show one actionable status message under the next-stop card.
   if (originLoading) helperText = 'Getting your current location...';
   else if (!destination) helperText = 'This stop is missing coordinates. Try regenerating your plan.';
   else if (originError) helperText = originError;
@@ -70,11 +74,24 @@ export default function TodayMode() {
         </Card.Actions>
         {originLoading ? <ActivityIndicator style={styles.loader} size="small" color={palette.primary} /> : null}
       </AppCard>
+      {plan ? <PrimaryButton onPress={() => setFeedbackVisible(true)}>Finish Day</PrimaryButton> : null}
       <View style={styles.tipWrap}>
         <Text variant="bodySmall" style={styles.tipText}>
           Offline tip: Saved plans remain available from local SQLite cache.
         </Text>
       </View>
+      {plan ? (
+        <FeedbackModal
+          visible={feedbackVisible}
+          plan={plan}
+          stops={stops}
+          onDismiss={() => setFeedbackVisible(false)}
+          onSubmitted={() => {
+            setFeedbackVisible(false);
+            router.push('/');
+          }}
+        />
+      ) : null}
     </AppScreen>
   );
 }

@@ -68,6 +68,7 @@ const includesAny = (text: string, keywords: string[]) => keywords.some((keyword
 const intersects = (values: string[], candidates: string[]) => values.some((value) => candidates.includes(value));
 
 export const evaluateOutdoorsRelevance = (place: OutdoorsRelevanceInput): OutdoorsRelevanceResult => {
+  // Outdoors filter is intentionally strict to block retail/grocery false positives.
   const reasons: string[] = [];
   const types = (place.types || []).map((type) => type.toLowerCase());
   const searchable = `${place.name || ''} ${place.vicinity || ''}`.toLowerCase();

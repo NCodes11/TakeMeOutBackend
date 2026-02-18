@@ -10,6 +10,7 @@ export default function SavedPlans() {
   const plans = usePlanStore((s) => s.plans);
   const [q, setQ] = useState('');
   const [group, setGroup] = useState('all');
+  // Local filter keeps list interactions instant without extra fetches.
   const filtered = useMemo(() => plans.filter((p) => (group === 'all' || p.groupType === group) && `${p.city} ${p.date}`.toLowerCase().includes(q.toLowerCase())), [plans, q, group]);
 
   return (
@@ -31,6 +32,7 @@ export default function SavedPlans() {
             <Card.Title title={item.title} subtitle={`${item.date} · ${item.city}`} />
             <Card.Actions>
               <PrimaryButton onPress={() => router.push(`/generated/${item.id}`)}>Open</PrimaryButton>
+              {/* Duplicate routes back through wizard so users can tweak before regenerating. */}
               <SecondaryButton onPress={() => router.push({ pathname: '/wizard', params: { city: item.city } })}>Duplicate</SecondaryButton>
             </Card.Actions>
           </AppCard>

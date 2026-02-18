@@ -1,11 +1,15 @@
+import { router } from 'expo-router';
 import { useState } from 'react';
+import { Alert } from 'react-native';
 import { StyleSheet, View } from 'react-native';
 import { SegmentedButtons, Switch, Text, TextInput } from 'react-native-paper';
 import { AppCard, AppScreen, SecondaryButton } from '@/components/ui';
+import { exportFeedbackJson } from '@/utils/share';
 import { requestNotificationPermissions } from '@/utils/notifications';
 import { palette, spacing } from '@/theme/appTheme';
 
 export default function SettingsScreen() {
+  // These controls are currently UI-level preferences for beta UX tuning.
   const [units, setUnits] = useState('miles');
   const [weekStart, setWeekStart] = useState('monday');
   const [quietHours, setQuietHours] = useState('22:00-07:00');
@@ -21,7 +25,19 @@ export default function SettingsScreen() {
         <Text>Notifications</Text>
         <Switch value={true} onValueChange={() => requestNotificationPermissions()} />
       </View>
-      <SecondaryButton>Export data (JSON)</SecondaryButton>
+      <SecondaryButton onPress={() => router.push('/feature-request')}>Suggest a Feature</SecondaryButton>
+      <SecondaryButton
+        onPress={async () => {
+          try {
+            // Beta helper: one-tap export of locally captured feedback datasets.
+            await exportFeedbackJson();
+          } catch {
+            Alert.alert('Export failed', 'Unable to export feedback right now.');
+          }
+        }}
+      >
+        Export data (JSON)
+      </SecondaryButton>
       <SecondaryButton>Import data (JSON)</SecondaryButton>
       </View>
       </AppCard>

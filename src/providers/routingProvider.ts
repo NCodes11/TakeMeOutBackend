@@ -12,6 +12,7 @@ export class OsrmProvider implements RoutingProvider {
   async route(points: [number, number][], mode: 'walk' | 'drive'): Promise<RouteLeg[]> {
     if (points.length < 2) return [];
     const profile = mode === 'walk' ? 'walking' : 'driving';
+    // Build per-leg routes so each stop can display ETA from previous stop.
     const pairs = points.slice(0, -1).map((p, i) => [p, points[i + 1]] as const);
     const legs: RouteLeg[] = [];
 
@@ -27,6 +28,7 @@ export class OsrmProvider implements RoutingProvider {
           polyline: route.geometry.coordinates.map((c: [number, number]) => [c[1], c[0]]),
         });
       } catch {
+        // Keep itinerary generation resilient if OSRM is unavailable.
         legs.push({ distanceKm: 2, etaMin: mode === 'walk' ? 25 : 8, polyline: [a, b] });
       }
     }

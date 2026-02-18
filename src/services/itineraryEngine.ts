@@ -103,6 +103,7 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
   const counts = new Map<StopType, number>(selected.map((type) => [type, 1]));
   const allocation = [...selected];
 
+  // First pass: fill remaining slots without violating default per-type caps.
   while (allocation.length < target) {
     const expandable = selected
       .filter((type) => (counts.get(type) || 0) < TYPE_RULES[type].maxDefault)
@@ -115,6 +116,7 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
     counts.set(next, (counts.get(next) || 0) + 1);
   }
 
+  // Second pass: if still short, allow repeats by repeatWeight priority.
   while (allocation.length < target) {
     const sortedByRepeat = [...selected].sort(
       (a, b) => TYPE_RULES[b].repeatWeight - TYPE_RULES[a].repeatWeight,
@@ -164,6 +166,7 @@ export const enforceCapsAndAdjacency = (tokens: StopType[]): StopType[] => {
 
   const output = [...tokens];
 
+  // Swap forward duplicates with later alternatives where possible.
   for (let i = 1; i < output.length; i += 1) {
     const current = output[i];
     const prev = output[i - 1];
@@ -209,6 +212,7 @@ export const selectPlaceForToken = ({
   const prev = selected[selected.length - 1];
   const maxTravel = Math.max(5, input.preferences.maxTravelMinutes || 30);
 
+  // Rank by type match, quality signals, budget fit, and travel-time feasibility.
   const ranked = candidates
     .map((candidate) => {
       let score = 10;
@@ -269,6 +273,7 @@ export const scheduleItinerary = (
 
   const maxTravel = Math.max(5, input.preferences.maxTravelMinutes || 30);
 
+  // Travel is derived from straight-line distance and capped by maxTravelMinutes.
   const computeTravel = (stops: PlaceCandidate[]) =>
     stops.map((_, i) => {
       if (i === 0) return 0;
@@ -284,6 +289,7 @@ export const scheduleItinerary = (
   let stops = [...orderedStops];
   let travel = computeTravel(stops);
 
+  // Trim tail stops until at least some stop-time fits inside the time window.
   while (stops.length > 1 && sum(travel) >= totalWindow) {
     stops = stops.slice(0, -1);
     travel = computeTravel(stops);
@@ -326,6 +332,7 @@ export const scheduleItinerary = (
   });
 
   const normalize = (targetTotal: number) => {
+    // Rebalance durations so total exactly matches available minutes.
     for (let pass = 0; pass < 10; pass += 1) {
       const current = sum(durations);
       let diff = targetTotal - current;

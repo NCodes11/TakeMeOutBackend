@@ -1,7 +1,56 @@
 import * as SQLite from 'expo-sqlite';
-import { ChecklistItem, Plan, Stop } from '@/types/models';
+import { ChecklistItem, FeatureRequest, Plan, Stop, TripFeedback } from '@/types/models';
 
 const db = SQLite.openDatabaseSync('daydate.db');
+
+interface StopRow {
+  id: string;
+  planId: string;
+  order?: unknown;
+  name?: unknown;
+  category?: unknown;
+  lat?: unknown;
+  lng?: unknown;
+  address?: unknown;
+  startTime?: unknown;
+  endTime?: unknown;
+  durationMin?: unknown;
+  costLevel?: unknown;
+  why?: unknown;
+  locked?: unknown;
+  openNow?: unknown;
+  rating?: unknown;
+  openingHoursText?: unknown;
+  priceLevel?: unknown;
+  distanceKm?: unknown;
+  etaMin?: unknown;
+  stopType?: unknown;
+  providerId?: unknown;
+  reviewCount?: unknown;
+}
+
+interface TripFeedbackRow {
+  id: string;
+  tripId: string;
+  timestamp: string;
+  thumbsUp: unknown;
+  feedbackText?: unknown;
+  selectedStopTypesJSON?: unknown;
+  locationCity?: unknown;
+  locationState?: unknown;
+  stopCount?: unknown;
+  priceTier: string;
+  distancePreference?: unknown;
+}
+
+interface FeatureRequestRow {
+  id: string;
+  message?: unknown;
+  category?: unknown;
+  timestamp: string;
+  appVersion?: unknown;
+  deviceType?: unknown;
+}
 
 const coerceBoolean = (value: unknown): boolean => {
   if (typeof value === 'boolean') return value;
@@ -100,6 +149,29 @@ export const initDb = () => {
       rawJSON TEXT,
       cachedAt TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS TripFeedback (
+      id TEXT PRIMARY KEY NOT NULL,
+      tripId TEXT NOT NULL,
+      timestamp TEXT NOT NULL,
+      thumbsUp INTEGER NOT NULL,
+      feedbackText TEXT,
+      selectedStopTypesJSON TEXT NOT NULL,
+      locationCity TEXT,
+      locationState TEXT,
+      stopCount INTEGER NOT NULL,
+      priceTier TEXT NOT NULL,
+      distancePreference INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS FeatureRequest (
+      id TEXT PRIMARY KEY NOT NULL,
+      message TEXT NOT NULL,
+      category TEXT,
+      timestamp TEXT NOT NULL,
+      appVersion TEXT NOT NULL,
+      deviceType TEXT NOT NULL
+    );
   `);
 
   // --- Migrations (safe to run every boot) ---
@@ -141,8 +213,8 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
         plan.createdAt,
         plan.returnToStart ? 1 : 0,
         // These may be undefined; SQLite will store NULL
-        (plan as any).startLat ?? null,
-        (plan as any).startLng ?? null,
+        plan.startLat ?? null,
+        plan.startLng ?? null,
       ],
     );
 
@@ -202,9 +274,9 @@ export const getPlans = (): Plan[] =>
       date: plan.date,
       startTime: plan.startTime,
       endTime: plan.endTime,
-      groupType: plan.groupType as any,
-      transport: plan.transport as any,
-      budget: plan.budget as any,
+      groupType: plan.groupType as Plan['groupType'],
+      transport: plan.transport as Plan['transport'],
+      budget: plan.budget as Plan['budget'],
       preferencesJSON: plan.preferencesJSON,
       createdAt: plan.createdAt,
       returnToStart: coerceBoolean(plan.returnToStart),
@@ -215,7 +287,7 @@ export const getPlans = (): Plan[] =>
 
 export const getPlanStops = (planId: string): Stop[] =>
   db
-    .getAllSync<any>('SELECT * FROM Stop WHERE planId = ? ORDER BY "order" ASC', [planId])
+    .getAllSync<StopRow>('SELECT * FROM Stop WHERE planId = ? ORDER BY "order" ASC', [planId])
     .map((stop) => ({
       id: stop.id,
       planId: stop.planId,
@@ -238,7 +310,7 @@ export const getPlanStops = (planId: string): Stop[] =>
       priceLevel: coerceNullableNumber(stop.priceLevel),
       distanceKm: coerceNullableNumber(stop.distanceKm),
       etaMin: coerceNullableNumber(stop.etaMin),
-      stopType: coerceNullableString(stop.stopType) as any,
+      stopType: coerceNullableString(stop.stopType) as Stop['stopType'],
       providerId: coerceNullableString(stop.providerId),
       reviewCount: coerceNullableNumber(stop.reviewCount),
     })) as Stop[];
@@ -258,6 +330,68 @@ export const saveChecklist = (items: ChecklistItem[]) => {
 
 export const getChecklist = (planId: string): ChecklistItem[] =>
   db.getAllSync<ChecklistItem>('SELECT * FROM ChecklistItem WHERE planId = ?', [planId]);
+
+export const saveTripFeedback = (entry: TripFeedback) => {
+  // Local-first write: feedback is retained offline and can be exported/synced later.
+  db.runSync(
+    `INSERT OR REPLACE INTO TripFeedback (
+      id,tripId,timestamp,thumbsUp,feedbackText,selectedStopTypesJSON,locationCity,locationState,stopCount,priceTier,distancePreference
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      entry.id,
+      entry.tripId,
+      entry.timestamp,
+      entry.thumbsUp ? 1 : 0,
+      entry.feedbackText ?? null,
+      JSON.stringify(entry.selectedStopTypes),
+      entry.locationCity ?? null,
+      entry.locationState ?? null,
+      entry.stopCount,
+      entry.priceTier,
+      typeof entry.distancePreference === 'number' ? entry.distancePreference : null,
+    ],
+  );
+};
+
+export const saveFeatureRequest = (entry: FeatureRequest) => {
+  db.runSync(
+    'INSERT OR REPLACE INTO FeatureRequest (id,message,category,timestamp,appVersion,deviceType) VALUES (?,?,?,?,?,?)',
+    [entry.id, entry.message, entry.category ?? null, entry.timestamp, entry.appVersion, entry.deviceType],
+  );
+};
+
+export const getTripFeedback = (): TripFeedback[] =>
+  // Read helpers normalize SQLite primitives back into app-level types.
+  db.getAllSync<TripFeedbackRow>('SELECT * FROM TripFeedback ORDER BY timestamp DESC').map((row) => ({
+    id: row.id,
+    tripId: row.tripId,
+    timestamp: row.timestamp,
+    thumbsUp: coerceBoolean(row.thumbsUp),
+    feedbackText: coerceNullableString(row.feedbackText),
+    selectedStopTypes: (() => {
+      try {
+        const parsed = JSON.parse(row.selectedStopTypesJSON ?? '[]');
+        return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
+      } catch {
+        return [];
+      }
+    })(),
+    locationCity: coerceNullableString(row.locationCity),
+    locationState: coerceNullableString(row.locationState),
+    stopCount: coerceNumber(row.stopCount),
+    priceTier: row.priceTier,
+    distancePreference: coerceNullableNumber(row.distancePreference),
+  }));
+
+export const getFeatureRequests = (): FeatureRequest[] =>
+  db.getAllSync<FeatureRequestRow>('SELECT * FROM FeatureRequest ORDER BY timestamp DESC').map((row) => ({
+    id: row.id,
+    message: row.message ?? '',
+    category: coerceNullableString(row.category) as FeatureRequest['category'],
+    timestamp: row.timestamp,
+    appVersion: row.appVersion ?? '',
+    deviceType: (row.deviceType as FeatureRequest['deviceType']) ?? 'ios',
+  }));
 
 export const cachePlaces = (rows: { providerKey: string; name: string; lat: number; lng: number; category: string; rawJSON: string }[]) => {
   const now = new Date().toISOString();

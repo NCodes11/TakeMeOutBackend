@@ -22,6 +22,7 @@ const parseMinutes = (time: string) => {
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const capStopsForWindow = (windowMinutes: number, requested: number) => {
+  // Prevent unrealistic stop counts for short day windows.
   let maxStops = 8;
   if (windowMinutes <= 60) maxStops = 2;
   else if (windowMinutes <= 90) maxStops = 3;
@@ -131,6 +132,7 @@ export const generateStops = async (
   candidates: PlaceCandidate[],
   routing: RoutingProvider,
 ): Promise<Stop[]> => {
+  // 1) Normalize request + validate candidate coordinates.
   const normalized = normalizeSelectedStopTypes(input.preferences.interests);
   const selectedStopTypes = enrichStopTypesIfOnlyRestaurants(normalized);
 
@@ -146,6 +148,7 @@ export const generateStops = async (
   const rawRequested = Math.max(1, Math.min(8, Math.floor(input.stopCount || 3)));
   const requestedCount = capStopsForWindow(totalMinutes, rawRequested);
 
+  // 2) Build a target sequence of stop-type tokens, then smooth adjacency/caps.
   const allocation = buildStopAllocation(selectedStopTypes, requestedCount);
 
   let orderedTokens = enforceCapsAndAdjacency(orderAllocation(allocation, input.startTime, input.endTime));
@@ -164,6 +167,7 @@ export const generateStops = async (
   const usedPlaceIds = new Set<string>();
   const usedProviderIds = new Set<string>();
 
+  // 3) Pick one place per token, then run a secondary fallback pass if needed.
   orderedTokens.forEach((token, tokenIndex) => {
     const tokenCandidates = (byType.get(token) || []).filter((candidate) => {
       if (usedPlaceIds.has(candidate.id)) return false;
@@ -252,6 +256,7 @@ export const generateStops = async (
   const coords = selected.map((s) => [s.lat, s.lng] as [number, number]);
   const routeLegs = await routing.route(coords, input.transport);
 
+  // 4) Assign clock times and enrich each stop with travel metadata.
   const scheduled: ScheduledStop[] = scheduleItinerary(selected, input, input.startTime, input.endTime);
 
   return scheduled.map((s, index) => {
@@ -334,6 +339,7 @@ export const rerollStop = async (params: {
 
   const compatibleTypes = getCompatibleTypes(primaryType);
 
+  // Candidate pool prefers same type but allows compatible fallbacks to avoid dead ends.
   const basePool = validCandidates.filter((c) => {
     const cType = ensureStopType(c.stopType);
     if (!compatibleTypes.includes(cType)) return false;

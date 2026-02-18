@@ -27,6 +27,7 @@ export const costLabelToTier = (costLevel?: string): number | null => {
 export const resolvePlaceTier = (priceLevel?: number, costLevel?: string): number | null =>
   priceLevelToTier(priceLevel) ?? costLabelToTier(costLevel);
 
+// Unknown price is allowed but slightly penalized in ranking instead of being excluded.
 export const isTierAllowed = (placeTier: number | null, selectedBudget: BudgetType): boolean =>
   placeTier == null || placeTier <= budgetToMaxTier(selectedBudget);
 

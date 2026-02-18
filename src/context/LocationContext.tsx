@@ -47,6 +47,7 @@ const formatPlaceLabel = (place?: Location.LocationGeocodedAddress | null) => {
 };
 
 const loadManualLocation = async () => {
+  // Restore the last successful manual geocode so manual mode survives app restarts.
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
   const parsed = JSON.parse(raw) as { coords: { latitude: number; longitude: number }; placeLabel: string; updatedAt: number };
@@ -71,6 +72,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
   const watchRef = useRef<Location.LocationSubscription | null>(null);
 
   const setCoordsFromLocation = useCallback(async (coords: { latitude: number; longitude: number }) => {
+    // Reverse geocode once so all downstream screens can use the same city/state label.
     const reverse = await Location.reverseGeocodeAsync(coords);
     const label = formatPlaceLabel(reverse[0]);
     console.log('[location] live_update', { coords, placeLabel: label });
@@ -88,6 +90,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const startWatching = useCallback(async () => {
+    // Keep a lightweight foreground watcher running while live mode is active.
     stopWatching();
     watchRef.current = await Location.watchPositionAsync(
       { accuracy: Location.Accuracy.Balanced, distanceInterval: 50, timeInterval: 15000 },
@@ -99,6 +102,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
   }, [setCoordsFromLocation, stopWatching]);
 
   const refreshLive = useCallback(async () => {
+    // Single-shot refresh used on app boot, resume, and manual "refresh location" paths.
     const permission = await Location.requestForegroundPermissionsAsync();
     const permissionState = toPermission(permission.status);
     setState((prev) => ({ ...prev, permission: permissionState }));
@@ -114,6 +118,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     if (state.mode === 'live') {
       return refreshLive();
     }
+    // In manual mode we re-geocode the stored label so coordinates stay current/valid.
     if (!state.placeLabel) return { coords: state.coords, placeLabel: state.placeLabel };
     const results = await Location.geocodeAsync(state.placeLabel);
     const first = results[0];
@@ -149,6 +154,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
   const setMode = useCallback(async (mode: LocationMode) => {
     await AsyncStorage.setItem(MODE_KEY, mode);
     if (mode === 'manual') {
+      // Manual mode can start immediately from persisted coordinates (no permission prompt).
       const manual = await loadManualLocation();
       if (manual) {
         setState((prev) => ({ ...prev, ...manual, mode: 'manual' }));
@@ -158,6 +164,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     }
     setState((prev) => ({ ...prev, mode }));
     if (mode === 'live') {
+      // Live mode always refreshes first, then attaches the watcher.
       await refreshLive();
       await startWatching();
     } else {
@@ -169,6 +176,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     let mounted = true;
 
     const boot = async () => {
+      // Recover preferred mode from storage; default to live if manual data is missing.
       const persistedMode = ((await AsyncStorage.getItem(MODE_KEY)) as LocationMode | null) || 'live';
       const manual = await loadManualLocation();
       if (!mounted) return;
@@ -189,6 +197,7 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
   }, [refreshLive, startWatching, stopWatching]);
 
   useEffect(() => {
+    // Refresh live location when app returns to foreground to avoid stale coordinates.
     const sub = AppState.addEventListener('change', (status) => {
       if (status !== 'active') return;
       if (state.mode !== 'live') return;

@@ -31,6 +31,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   warning: undefined,
 
   boot: () => {
+    // DB init is synchronous; then hydrate in-memory Zustand state from SQLite.
     initDb();
     get().loadPlans();
   },
@@ -109,6 +110,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
 
   lockStop: (planId, stopId, locked) => {
+    // Lock state is persisted by rewriting the plan's stop set in SQLite.
     const stops = (get().stopsByPlan[planId] || []).map((s) =>
       s.id === stopId ? { ...s, locked: locked ? 1 : 0 } : s,
     );
@@ -120,6 +122,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
 
   reorderStops: (planId, from, to) => {
+    // Reindex "order" after move so timeline/list rendering remains deterministic.
     const current = [...(get().stopsByPlan[planId] || [])];
     const [moved] = current.splice(from, 1);
     current.splice(to, 0, moved);
@@ -192,6 +195,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       if (!target) return;
 
       if (target.locked === 1) {
+        // Reroll intentionally respects lock state so user-selected anchors remain fixed.
         set({ warning: 'This stop is locked. Unlock it to reroll.' });
         return;
       }

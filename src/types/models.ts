@@ -88,6 +88,31 @@ export interface CachedPlace {
   cachedAt: string;
 }
 
+export interface TripFeedback {
+  id: string;
+  tripId: string;
+  timestamp: string;
+  thumbsUp: boolean;
+  feedbackText?: string;
+  selectedStopTypes: string[];
+  locationCity?: string;
+  locationState?: string;
+  stopCount: number;
+  priceTier: BudgetType;
+  distancePreference?: number;
+}
+
+export type FeatureRequestCategory = 'New Feature' | 'Bug Report' | 'UI Improvement' | 'Other';
+
+export interface FeatureRequest {
+  id: string;
+  message: string;
+  category?: FeatureRequestCategory;
+  timestamp: string;
+  appVersion: string;
+  deviceType: 'ios' | 'android' | 'web';
+}
+
 export interface PlaceCandidate {
   id: string;
   providerId?: string;

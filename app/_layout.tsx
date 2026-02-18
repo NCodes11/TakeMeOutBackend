@@ -9,11 +9,13 @@ export default function RootLayout() {
   const boot = usePlanStore((s) => s.boot);
 
   useEffect(() => {
+    // Initialize local persistence/state once when the app shell mounts.
     if (typeof boot !== 'function') return;
     boot();
   }, [boot]);
 
   return (
+    // Global providers + stack routes shared across every screen.
     <PaperProvider theme={appTheme}>
       <LocationProvider>
         <Stack
@@ -32,6 +34,7 @@ export default function RootLayout() {
           <Stack.Screen name="today/[id]" options={{ title: 'Navigate' }} />
           <Stack.Screen name="saved" options={{ title: 'Saved Plans' }} />
           <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+          <Stack.Screen name="feature-request" options={{ title: 'Suggest a Feature' }} />
         </Stack>
       </LocationProvider>
     </PaperProvider>

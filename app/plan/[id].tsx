@@ -19,6 +19,7 @@ export default function PlanDetailScreen() {
     <AppScreen title="Plan Detail" subtitle="Reorder stops and prepare your checklist.">
       <AppCard>
         <Card.Content style={styles.content}>
+      {/* Stop order controls write back through the store so generated/today views stay in sync. */}
       <Text variant="titleLarge">Reorder Stops</Text>
       {stops.map((s, i) => (
         <View key={s.id} style={styles.stopRow}>
@@ -32,6 +33,7 @@ export default function PlanDetailScreen() {
 
       <Text variant="titleMedium">Packing checklist</Text>
       <SecondaryButton onPress={() => {
+        // Quick starter checklist for family-oriented trips.
         const familyKit = ['Snacks', 'Water', 'Portable charger', 'Wipes', 'First-aid'];
         const next = [...items, ...familyKit.map((t) => ({ id: Crypto.randomUUID(), planId: id, text: t, done: 0 }))];
         setItems(next);
