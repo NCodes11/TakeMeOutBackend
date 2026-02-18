@@ -102,7 +102,6 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => 
 };
 
 const buildRadiusSteps = (options?: PlacesSearchOptions) => {
-  // Radius grows with requested stop count and transport speed to avoid sparse result sets.
   const stopCount = Math.max(2, Math.min(8, Math.floor(options?.stopCount || 3)));
   const byStopCount =
     stopCount <= 3 ? [8000, 12000, 20000] : stopCount <= 6 ? [12000, 20000, 30000] : [20000, 30000, 45000];
@@ -130,14 +129,83 @@ const toCostLevel = (priceLevel?: number): string => {
   return '$$$$';
 };
 
-const shuffleInPlace = <T,>(arr: T[]) => {
-  for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const tmp = arr[i];
-    arr[i] = arr[j];
-    arr[j] = tmp;
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+const normalizePlaceName = (name: string) => {
+  return (name || '')
+    .toLowerCase()
+    .replace(/[#@].*$/g, '')
+    .replace(/\s+-\s+.*$/g, '')
+    .replace(/\(.*?\)/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const brandKeyForPlace = (p: { name: string }) => normalizePlaceName(p.name);
+
+/**
+ * Extra hard-block safety net (in addition to categoryPolicy.ts).
+ * This prevents “bad” classes/types slipping through from inconsistent provider tagging.
+ */
+const isGloballyBlocked = (place: { name?: string; address?: string; tags?: string[]; stopType?: StopType }) => {
+  const txt = `${place.name || ''} ${place.address || ''} ${(place.tags || []).join(' ')}`.toLowerCase();
+
+  // grocery / supermarket / convenience
+  if (/\b(grocery|supermarket|convenience store|market)\b/.test(txt)) return true;
+
+  // movie theaters / cinemas (user request)
+  if (/\b(movie theater|cinema|cineplex)\b/.test(txt)) return true;
+
+  return false;
+};
+
+const scoreCandidate = (p: PlaceCandidate, origin?: SearchOrigin) => {
+  // Higher is better
+  const rating = typeof p.rating === 'number' ? p.rating : 0;
+  const reviews = typeof p.reviewCount === 'number' ? p.reviewCount : 0;
+
+  const ratingScore = clamp01(rating / 5) * 4; // 0..4
+  const reviewScore = Math.log10(reviews + 1) * 1.2; // ~0..(small)
+  const distanceKm = origin ? haversineKm(origin.lat, origin.lng, p.lat, p.lng) : 0;
+  const distancePenalty = origin ? clamp01(distanceKm / 35) * 1.4 : 0; // penalize far results
+
+  return ratingScore + reviewScore - distancePenalty;
+};
+
+/**
+ * Dedupes aggressively:
+ * - providerId (best when available)
+ * - exact coords + name
+ * - brand-level name normalization (prevents Pizza Hut twice)
+ */
+const dedupeAggressive = (rows: PlaceCandidate[]) => {
+  const seenProvider = new Set<string>();
+  const seenCoordName = new Set<string>();
+  const seenBrand = new Set<string>();
+
+  const out: PlaceCandidate[] = [];
+  for (const r of rows) {
+    if (!r?.name || !Number.isFinite(r.lat) || !Number.isFinite(r.lng)) continue;
+
+    const pid = r.providerId ? String(r.providerId) : '';
+    if (pid) {
+      if (seenProvider.has(pid)) continue;
+      seenProvider.add(pid);
+    }
+
+    const coordNameKey = `${r.lat.toFixed(5)}|${r.lng.toFixed(5)}|${normalizePlaceName(r.name)}`;
+    if (seenCoordName.has(coordNameKey)) continue;
+    seenCoordName.add(coordNameKey);
+
+    const brandKey = brandKeyForPlace(r);
+    if (brandKey && seenBrand.has(brandKey)) continue;
+    if (brandKey) seenBrand.add(brandKey);
+
+    out.push(r);
   }
-  return arr;
+
+  return out;
 };
 
 export class NominatimOverpassProvider implements PlacesProvider {
@@ -148,7 +216,6 @@ export class NominatimOverpassProvider implements PlacesProvider {
     desiredCount = 3,
     options?: PlacesSearchOptions,
   ): Promise<{ places: PlaceCandidate[]; warnings: string[] }> {
-    // Strategy: cache -> Google (if configured) -> OSM fallback, then dedupe + policy filter.
     const selectedStopTypes = normalizeSelectedStopTypes(interests);
     const requestedStopTypes: StopType[] = selectedStopTypes.length > 0 ? selectedStopTypes : ['activity', 'outdoors'];
 
@@ -171,27 +238,25 @@ export class NominatimOverpassProvider implements PlacesProvider {
 
     const cachedPlaces: PlaceCandidate[] =
       cachedRows.length > 0
-        ? this.dedupePlaces(
-            cachedRows
-              .map((row) => {
-                try {
-                  const parsed = JSON.parse(row.rawJSON) as PlaceCandidate;
-                  if (parsed && parsed.name && Number.isFinite(parsed.lat) && Number.isFinite(parsed.lng)) return parsed;
-                } catch {}
-                return {
-                  id: `${row.lat}-${row.lng}-${row.name}`,
-                  providerId: `${row.lat}-${row.lng}-${row.name}`,
-                  name: row.name,
-                  lat: row.lat,
-                  lng: row.lng,
-                  category: row.category,
-                  address: row.name,
-                  tags: [row.category],
-                  stopType: this.categoryToStopType(row.category),
-                } as PlaceCandidate;
-              })
-              .filter(Boolean),
-          )
+        ? cachedRows
+            .map((row) => {
+              try {
+                const parsed = JSON.parse(row.rawJSON) as PlaceCandidate;
+                if (parsed && parsed.name && Number.isFinite(parsed.lat) && Number.isFinite(parsed.lng)) return parsed;
+              } catch {}
+              return {
+                id: `${row.lat}-${row.lng}-${row.name}`,
+                providerId: `${row.lat}-${row.lng}-${row.name}`,
+                name: row.name,
+                lat: row.lat,
+                lng: row.lng,
+                category: row.category,
+                address: row.name,
+                tags: [row.category],
+                stopType: this.categoryToStopType(row.category),
+              } as PlaceCandidate;
+            })
+            .filter(Boolean)
         : [];
 
     const merged: PlaceCandidate[] = [];
@@ -200,16 +265,10 @@ export class NominatimOverpassProvider implements PlacesProvider {
 
     if (googleApiKey && origin) {
       const googleRows = await this.searchViaGoogle(requestedStopTypes, city, origin, maxResults, googleApiKey, options);
-      merged.push(...this.filterRowsByStopTypes(googleRows, requestedStopTypes));
-
-      const uniqueSoFar = this.dedupePlaces(merged);
-      if (uniqueSoFar.length < targetCount) {
-        warnings.push(`Google Places returned only ${uniqueSoFar.length} nearby matches. Expanding with OpenStreetMap.`);
-      }
+      merged.push(...googleRows);
     }
 
     if (merged.length < maxResults) {
-      // Always keep an open-data fallback so search still works without Google quota/key.
       const openStreet = await this.searchViaOpenStreetMap(city, requestedStopTypes, origin, maxResults, warnings);
       merged.push(...openStreet);
     }
@@ -218,8 +277,24 @@ export class NominatimOverpassProvider implements PlacesProvider {
       merged.push(...cachedPlaces);
     }
 
-    const unique = this.dedupePlaces(this.filterRowsByStopTypes(merged, requestedStopTypes));
-    shuffleInPlace(unique);
+    // Policy filter + global blocks
+    const policyFiltered = merged.filter((row) => {
+      if (!row) return false;
+      if (!requestedStopTypes.includes(row.stopType)) return false;
+      if (isGloballyBlocked(row)) return false;
+
+      const evaluation = evaluateCategoryCandidate(row.stopType, {
+        name: row.name,
+        address: row.address,
+        types: row.tags,
+      });
+
+      return evaluation.accepted;
+    });
+
+    // Rank by quality and remove duplicates (including chain duplicates)
+    policyFiltered.sort((a, b) => scoreCandidate(b, origin) - scoreCandidate(a, origin));
+    const unique = dedupeAggressive(policyFiltered);
 
     const final = unique.slice(0, maxResults);
 
@@ -235,7 +310,9 @@ export class NominatimOverpassProvider implements PlacesProvider {
             rawJSON: JSON.stringify(p),
           })),
         );
-      } catch {}
+      } catch {
+        // best-effort
+      }
     }
 
     if (final.length < targetCount) warnings.push('Not enough places found nearby.');
@@ -250,7 +327,6 @@ export class NominatimOverpassProvider implements PlacesProvider {
     apiKey: string,
     options?: PlacesSearchOptions,
   ): Promise<PlaceCandidate[]> {
-    // Query each selected stop type independently so category balance survives scoring.
     const radiusSteps = buildRadiusSteps(options);
     const mode = options?.mode ?? 'plan';
 
@@ -271,6 +347,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
 
       for (const radius of radiusSteps) {
         usedRadius = radius;
+
         const nearbyTypes = policy.nearbyTypes.length ? policy.nearbyTypes : ['point_of_interest'];
 
         for (const nearbyType of nearbyTypes) {
@@ -319,10 +396,15 @@ export class NominatimOverpassProvider implements PlacesProvider {
         const distanceKm = haversineKm(origin.lat, origin.lng, Number(lat), Number(lng));
         if (distanceKm * 1000 > usedRadius) continue;
 
+        const tags = row.types || [stopType];
+        const address = row.vicinity || row.formatted_address || '';
+
+        if (isGloballyBlocked({ name, address, tags, stopType })) continue;
+
         const evaluation = evaluateCategoryCandidate(stopType, {
           name,
-          address: row.vicinity || row.formatted_address || '',
-          types: row.types || [],
+          address,
+          types: tags,
         });
         if (!evaluation.accepted) continue;
 
@@ -333,8 +415,8 @@ export class NominatimOverpassProvider implements PlacesProvider {
           lat: Number(lat),
           lng: Number(lng),
           category: this.categoryFromGoogleTypes(row.types || [], stopType),
-          address: row.vicinity || row.formatted_address || 'Address unavailable',
-          tags: row.types || [stopType],
+          address: address || 'Address unavailable',
+          tags,
           costLevel: toCostLevel(row.price_level),
           stopType,
           openNow: row.opening_hours?.open_now,
@@ -382,7 +464,6 @@ export class NominatimOverpassProvider implements PlacesProvider {
         const token = json.next_page_token;
         if (!token || all.length >= limit) break;
 
-        // Google requires a short delay before next_page_token is valid.
         await new Promise((res) => setTimeout(res, 1600));
 
         const next = new URL(url);
@@ -430,7 +511,6 @@ export class NominatimOverpassProvider implements PlacesProvider {
     apiKey: string,
     options?: PlacesSearchOptions,
   ): Promise<PlaceCandidate[]> {
-    // Attractions run a broader query set and larger radii than other categories.
     const policy = CATEGORY_POLICIES.attraction;
     const merged = new Map<string, GoogleNearbyPlace>();
     const radiusSteps = options ? Array.from(new Set([...ATTRACTION_RADIUS_STEPS])) : ATTRACTION_RADIUS_STEPS;
@@ -489,12 +569,16 @@ export class NominatimOverpassProvider implements PlacesProvider {
       const distanceKm = haversineKm(origin.lat, origin.lng, Number(lat), Number(lng));
       if (distanceKm * 1000 > radius) continue;
 
+      const tags = row.types || ['attraction'];
+      const address = row.vicinity || row.formatted_address || '';
+
+      if (isGloballyBlocked({ name, address, tags, stopType: 'attraction' })) continue;
+
       const evaluation = evaluateCategoryCandidate('attraction', {
         name,
-        address: row.vicinity || row.formatted_address || '',
-        types: row.types || [],
+        address,
+        types: tags,
       });
-
       if (!evaluation.accepted) continue;
 
       acceptedRows.push({
@@ -504,8 +588,8 @@ export class NominatimOverpassProvider implements PlacesProvider {
         lat: Number(lat),
         lng: Number(lng),
         category: this.categoryFromGoogleTypes(row.types || [], 'attraction'),
-        address: row.vicinity || row.formatted_address || 'Address unavailable',
-        tags: row.types || ['attraction'],
+        address: address || 'Address unavailable',
+        tags,
         costLevel: toCostLevel(row.price_level),
         stopType: 'attraction',
         openNow: row.opening_hours?.open_now,
@@ -521,7 +605,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
       });
     }
 
-    acceptedRows.sort((a, b) => (b.rating || 0) - (a.rating || 0) || (b.reviewCount || 0) - (a.reviewCount || 0));
+    acceptedRows.sort((a, b) => scoreCandidate(b, origin) - scoreCandidate(a, origin));
     return acceptedRows;
   }
 
@@ -537,7 +621,6 @@ export class NominatimOverpassProvider implements PlacesProvider {
       let centerLng = origin?.lng;
 
       if (centerLat == null || centerLng == null) {
-        // Derive a city center first when user origin is missing.
         await waitIfNeeded();
         const geocode = await fetch(
           `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(city)}&format=json&limit=1`,
@@ -566,26 +649,31 @@ export class NominatimOverpassProvider implements PlacesProvider {
         .slice(0, maxResults)
         .map((element) => {
           const tags = element.tags || {};
-          return {
+          const stopType = this.stopTypeFromTags(tags);
+          const name = String(tags.name);
+
+          const candidate: PlaceCandidate = {
             id: String(element.id),
             providerId: String(element.id),
-            name: String(tags.name),
+            name,
             lat: Number(element.lat),
             lng: Number(element.lon),
             category: this.categoryFromTags(tags),
             address: this.addressFromTags(tags, city),
             tags: Object.values(tags).map(String),
             costLevel: this.costLevelFromTags(tags),
-            stopType: this.stopTypeFromTags(tags),
-          } as PlaceCandidate;
-        });
+            stopType,
+          };
 
-      const filtered = this.filterRowsByStopTypes(rows, stopTypes);
+          return candidate;
+        })
+        .filter((row) => !isGloballyBlocked(row));
+
+      const filtered = rows.filter((row) => stopTypes.includes(row.stopType));
       const missingTypes = stopTypes.filter((type) => !filtered.some((row) => row.stopType === type));
       if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
       return filtered.slice(0, maxResults);
     } catch {
-      // Final fallback when Overpass is unavailable/rate-limited.
       return this.searchViaNominatim(city, stopTypes, origin, maxResults, warnings);
     }
   }
@@ -595,6 +683,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
       new Set(stopTypes.flatMap((stopType) => STOP_TYPE_OPTIONS.find((option) => option.id === stopType)?.queryKeywords || [])),
     );
     const pattern = queryKeywords.join('|');
+
     return `[out:json][timeout:25];
 (
   node(around:6500,${lat},${lng})[name][amenity~"${pattern}",i];
@@ -631,14 +720,12 @@ out body 120;`;
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
         if (origin && haversineKm(origin.lat, origin.lng, lat, lng) > 60) continue;
 
-        const dedupe = `${lat.toFixed(4)}-${lng.toFixed(4)}`;
-        if (seen.has(dedupe)) continue;
-        seen.add(dedupe);
+        const name = row.name || this.titleFromDisplayName(row.display_name);
 
-        results.push({
+        const candidate: PlaceCandidate = {
           id: String(row.place_id),
           providerId: String(row.place_id),
-          name: row.name || this.titleFromDisplayName(row.display_name),
+          name,
           lat,
           lng,
           category: this.categoryFromTags({ type: row.type || '', class: row.class || '', keyword: entry.keyword }),
@@ -646,11 +733,19 @@ out body 120;`;
           tags: [entry.keyword, row.type || '', row.class || ''].filter(Boolean),
           costLevel: '$$',
           stopType: entry.stopType,
-        });
+        };
+
+        if (isGloballyBlocked(candidate)) continue;
+
+        const dedupeKey = `${brandKeyForPlace(candidate)}|${lat.toFixed(4)}|${lng.toFixed(4)}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+
+        results.push(candidate);
       }
     }
 
-    const filtered = this.filterRowsByStopTypes(results, stopTypes);
+    const filtered = results.filter((row) => stopTypes.includes(row.stopType));
     const missingTypes = stopTypes.filter((type) => !filtered.some((row) => row.stopType === type));
     if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
     return filtered.slice(0, maxResults);
@@ -678,12 +773,6 @@ out body 120;`;
   private titleFromDisplayName(displayName: string) {
     const first = displayName.split(',')[0]?.trim();
     return first || 'Interesting spot';
-  }
-
-  private filterRowsByStopTypes(rows: PlaceCandidate[], requestedStopTypes: StopType[]) {
-    if (requestedStopTypes.length === 0) return rows;
-    const allowed = new Set<StopType>(requestedStopTypes);
-    return rows.filter((row) => allowed.has(row.stopType));
   }
 
   private categoryToStopType(category: string): StopType {
@@ -748,19 +837,5 @@ out body 120;`;
     if (joined.includes('museum') || joined.includes('art_gallery')) return 'Arts';
     if (joined.includes('shopping_mall') || joined.includes('store')) return 'Shopping';
     return stopType.charAt(0).toUpperCase() + stopType.slice(1);
-  }
-
-  private dedupePlaces(rows: PlaceCandidate[]): PlaceCandidate[] {
-    // Dedupe by provider id + rounded coordinates + normalized name for stable rerolls.
-    const seen = new Set<string>();
-    return rows.filter((row) => {
-      const pid = row.providerId ? `pid:${row.providerId}` : '';
-      const coordKey = `${row.lat.toFixed(5)}-${row.lng.toFixed(5)}`;
-      const nameKey = row.name.toLowerCase().trim();
-      const key = `${pid}|${coordKey}|${nameKey}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
   }
 }
