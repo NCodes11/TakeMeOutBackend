@@ -130,9 +130,9 @@ export default function WizardScreen() {
         <Text variant="bodySmall" style={styles.emptyHint}>Select at least one stop type.</Text>
       ) : null}
       <Text variant="titleSmall" style={styles.sectionTitle}>Number of Stops</Text>
-      <Text variant="bodySmall" style={styles.helperText}>Select between 2 and 8 stops.</Text>
+      <Text variant="bodySmall" style={styles.helperText}>Select between 1 and 8 stops.</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-        {[2, 3, 4, 5, 6, 7, 8].map((count) => (
+        {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
           <Chip
             key={count}
             selected={input.stopCount === count}
