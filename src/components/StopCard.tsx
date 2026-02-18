@@ -1,84 +1,125 @@
-import { useState } from 'react';
+import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Card, Chip, Text } from 'react-native-paper';
+import { Card, Text } from 'react-native-paper';
 import { SecondaryButton } from '@/components/ui';
 import { Stop } from '@/types/models';
-import { stopTypeLabel } from '@/constants/stopTypes';
 import { palette, spacing } from '@/theme/appTheme';
 
-interface Props {
+type Props = {
   stop: Stop;
-  onLock: () => void;
-  onSwap?: () => void;
-  onRemove?: () => void;
-  onOpenMap?: () => void;
-}
-
-export const StopCard = ({ stop, onLock, onSwap, onRemove, onOpenMap }: Props) => {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <Card style={styles.card} mode="contained" onPress={() => setExpanded((value) => !value)}>
-      <Card.Title title={`${stop.startTime} · ${stop.name}`} subtitle={`${stop.category} · ${stop.durationMin} min`} />
-      <Card.Content>
-        <Text variant="bodyMedium">{stop.why}</Text>
-        <Text variant="bodySmall" style={styles.address}>{stop.address}</Text>
-        <View style={styles.chips}>
-          {stop.stopType ? <Chip>{stopTypeLabel(stop.stopType)}</Chip> : null}
-          <Chip>{stop.costLevel || 'Unknown'}</Chip>
-          <Chip>{stop.openNow ? 'Open now' : 'Hours unknown'}</Chip>
-          <Chip>{Math.round((stop.distanceKm || 0) * 10) / 10} km</Chip>
-          <Chip>{Math.round(stop.etaMin || 0)} min</Chip>
-          {typeof stop.rating === 'number' ? <Chip>Rating {stop.rating.toFixed(1)}</Chip> : null}
-        </View>
-        {expanded ? (
-          <View style={styles.expanded}>
-            <Text variant="bodySmall" style={styles.detailText}>
-              {stop.openingHoursText || 'Business hours unavailable'}
-            </Text>
-            <Text variant="bodySmall" style={styles.detailHint}>Tap card to collapse details.</Text>
-          </View>
-        ) : null}
-      </Card.Content>
-      <Card.Actions>
-        {onOpenMap ? <SecondaryButton onPress={onOpenMap}>Open in Maps</SecondaryButton> : null}
-        <SecondaryButton onPress={onLock}>{stop.locked ? 'Unlock' : 'Lock'}</SecondaryButton>
-        {onSwap && <SecondaryButton onPress={onSwap}>Swap</SecondaryButton>}
-        {onRemove && <SecondaryButton onPress={onRemove}>Remove</SecondaryButton>}
-      </Card.Actions>
-    </Card>
-  );
+  onReroll?: () => void;
+  onOpenMap?: () => void | Promise<void>;
 };
 
+export function StopCard({ stop, onReroll, onOpenMap }: Props) {
+  const timeLabel =
+    stop.startTime && stop.endTime ? `${stop.startTime}–${stop.endTime}` : undefined;
+
+  return (
+    <View style={styles.wrap}>
+      <Card mode="outlined">
+        <Card.Content style={styles.content}>
+          <View style={styles.headerRow}>
+            <View style={styles.titleCol}>
+              <Text variant="titleMedium" style={styles.title}>
+                {stop.name}
+              </Text>
+
+              <Text variant="bodySmall" style={styles.subTitle}>
+                {stop.category}
+                {timeLabel ? ` · ${timeLabel}` : ''}
+              </Text>
+
+              {stop.address ? (
+                <Text variant="bodySmall" style={styles.address}>
+                  {stop.address}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+
+          <View style={styles.metaRow}>
+            {typeof stop.durationMin === 'number' ? (
+              <Text variant="bodySmall" style={styles.meta}>
+                {stop.durationMin} min
+              </Text>
+            ) : null}
+
+            {typeof stop.etaMin === 'number' && stop.order > 0 ? (
+              <Text variant="bodySmall" style={styles.meta}>
+                · {stop.etaMin} min travel
+              </Text>
+            ) : null}
+
+            {typeof stop.rating === 'number' ? (
+              <Text variant="bodySmall" style={styles.meta}>
+                · {stop.rating.toFixed(1)}★
+              </Text>
+            ) : null}
+
+            {typeof stop.reviewCount === 'number' ? (
+              <Text variant="bodySmall" style={styles.meta}>
+                · {stop.reviewCount}
+              </Text>
+            ) : null}
+          </View>
+
+          {(onOpenMap || onReroll) && (
+            <View style={styles.actions}>
+              {onOpenMap ? (
+                <SecondaryButton onPress={onOpenMap}>Open in Maps</SecondaryButton>
+              ) : null}
+
+              {onReroll ? (
+                <SecondaryButton onPress={onReroll}>Reroll</SecondaryButton>
+              ) : null}
+            </View>
+          )}
+        </Card.Content>
+      </Card>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  card: {
-    marginBottom: spacing.md,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
+  wrap: {
+    marginBottom: spacing.sm,
+  },
+  content: {
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  titleCol: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  title: {
+    color: palette.text,
+    fontWeight: '700',
+  },
+  subTitle: {
+    color: palette.muted,
   },
   address: {
     color: palette.muted,
-    marginTop: spacing.xs,
   },
-  chips: {
+  metaRow: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
     flexWrap: 'wrap',
+    alignItems: 'center',
   },
-  expanded: {
-    marginTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: palette.border,
-    paddingTop: spacing.sm,
-    gap: spacing.xs,
-  },
-  detailText: {
-    color: palette.text,
-  },
-  detailHint: {
+  meta: {
     color: palette.muted,
+  },
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
   },
 });

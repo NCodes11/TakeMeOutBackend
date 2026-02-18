@@ -1,4 +1,4 @@
-import { getCachedPlaces } from '@/db/sqlite';
+import { cachePlaces, getCachedPlaces } from '@/db/sqlite';
 import { normalizeSelectedStopTypes, STOP_TYPE_OPTIONS } from '@/constants/stopTypes';
 import { PlaceCandidate, StopType, TransportType } from '@/types/models';
 import { CATEGORY_POLICIES, evaluateCategoryCandidate } from './categoryPolicy';
@@ -60,6 +60,15 @@ export interface PlacesSearchOptions {
   transport?: TransportType;
   maxTravelMinutes?: number;
   stopCount?: number;
+
+  /** 'plan' favors caching; 'reroll' prioritizes fresh results and larger pools. */
+  mode?: 'plan' | 'reroll';
+
+  /** Cache bucket size for stable reuse. */
+  cacheTtlMinutes?: number;
+
+  /** Optional extra entropy for cache keys (e.g. planId-stopIndex). */
+  cacheBuster?: string;
 }
 
 export interface PlacesProvider {
@@ -73,21 +82,9 @@ export interface PlacesProvider {
 }
 
 const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+
 const MAX_RADIUS_METERS = 60000;
 const rateLimiter = { lastMs: 0 };
-const MAJOR_ATTRACTION_SEEDS = [
-  'Walt Disney World',
-  'Magic Kingdom',
-  'EPCOT',
-  'Hollywood Studios',
-  'Animal Kingdom',
-  'Universal Orlando',
-  'Islands of Adventure',
-  'SeaWorld Orlando',
-  'Disney Springs',
-  'ICON Park',
-  'Kennedy Space Center',
-];
 
 const waitIfNeeded = async () => {
   const gap = 1100 - (Date.now() - rateLimiter.lastMs);
@@ -96,6 +93,7 @@ const waitIfNeeded = async () => {
 };
 
 const toRadians = (value: number) => (value * Math.PI) / 180;
+
 const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const dLat = toRadians(lat2 - lat1);
   const dLon = toRadians(lon2 - lon1);
@@ -106,21 +104,22 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => 
 const buildRadiusSteps = (options?: PlacesSearchOptions) => {
   const stopCount = Math.max(2, Math.min(8, Math.floor(options?.stopCount || 3)));
   const byStopCount =
-    stopCount <= 3 ? [8000, 12000, 20000] :
-    stopCount <= 6 ? [12000, 20000, 30000] :
-    [20000, 30000, 45000];
+    stopCount <= 3 ? [8000, 12000, 20000] : stopCount <= 6 ? [12000, 20000, 30000] : [20000, 30000, 45000];
+
   const speed = options?.transport === 'walk' ? 4.5 : 35;
   const minutes = Math.max(10, options?.maxTravelMinutes || 20);
-  const baseMeters = Math.max(10000, Math.min(MAX_RADIUS_METERS, Math.round(((speed * minutes) / 60) * 1000)));
+  const baseMeters = Math.max(8000, Math.min(MAX_RADIUS_METERS, Math.round(((speed * minutes) / 60) * 1000)));
+
   const speedScale = options?.transport === 'walk' ? 0.75 : 1;
   const scaledByCount = byStopCount.map((value) => Math.round(value * speedScale));
-  const steps = [baseMeters, ...scaledByCount, 60000];
+
+  const expanded = Math.min(MAX_RADIUS_METERS, Math.round(baseMeters * 1.35));
+  const steps = [baseMeters, expanded, ...scaledByCount, 60000];
+
   return Array.from(new Set(steps.filter((value) => value <= MAX_RADIUS_METERS))).sort((a, b) => a - b);
 };
 
 const ATTRACTION_RADIUS_STEPS = [15000, 30000, 60000, 80000];
-
-const MAJOR_ATTRACTION_BRAND_TERMS = ['disney', 'universal', 'seaworld', 'icon park', 'kennedy space center', 'legoland'];
 
 const toCostLevel = (priceLevel?: number): string => {
   if (typeof priceLevel !== 'number') return 'Unknown';
@@ -128,6 +127,16 @@ const toCostLevel = (priceLevel?: number): string => {
   if (priceLevel === 2) return '$$';
   if (priceLevel === 3) return '$$$';
   return '$$$$';
+};
+
+const shuffleInPlace = <T,>(arr: T[]) => {
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  return arr;
 };
 
 export class NominatimOverpassProvider implements PlacesProvider {
@@ -140,46 +149,94 @@ export class NominatimOverpassProvider implements PlacesProvider {
   ): Promise<{ places: PlaceCandidate[]; warnings: string[] }> {
     const selectedStopTypes = normalizeSelectedStopTypes(interests);
     const requestedStopTypes: StopType[] = selectedStopTypes.length > 0 ? selectedStopTypes : ['activity', 'outdoors'];
-    const targetCount = Math.max(2, Math.min(8, Math.floor(desiredCount)));
-    const maxResults = Math.max(targetCount * 8, 24);
-    const warnings: string[] = [];
-    const googleApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
-    const cacheKey = origin
-      ? `nomi-${origin.lat.toFixed(3)}-${origin.lng.toFixed(3)}-${requestedStopTypes.join('-')}`
-      : `nomi-${city.toLowerCase()}-${requestedStopTypes.join('-')}`;
 
-    const cached = getCachedPlaces(cacheKey);
-    if (cached.length > 0) {
-      const mapped = cached.map((row) => ({
-        id: `${row.lat}-${row.lng}-${row.name}`,
-        providerId: `${row.lat}-${row.lng}-${row.name}`,
-        name: row.name,
-        lat: row.lat,
-        lng: row.lng,
-        category: row.category,
-        address: row.name,
-        tags: [row.category],
-        stopType: this.categoryToStopType(row.category),
-      }));
-      const unique = this.dedupePlaces(mapped).slice(0, maxResults);
-      if (unique.length < targetCount) warnings.push('Not enough places found nearby.');
-      return { places: unique, warnings };
-    }
+    const targetCount = Math.max(2, Math.min(8, Math.floor(desiredCount)));
+    const maxResults = Math.max(targetCount * 12, 48);
+    const warnings: string[] = [];
+
+    const mode = options?.mode ?? 'plan';
+    const googleApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
+
+    const ttlMinutes = Math.max(5, options?.cacheTtlMinutes ?? (mode === 'reroll' ? 10 : 60));
+    const bucket = Math.floor(Date.now() / (ttlMinutes * 60 * 1000));
+    const buster = options?.cacheBuster ? `-${options.cacheBuster}` : '';
+
+    const cacheKey = origin
+      ? `places-${origin.lat.toFixed(3)}-${origin.lng.toFixed(3)}-${requestedStopTypes.join('-')}-${bucket}${buster}`
+      : `places-${city.toLowerCase()}-${requestedStopTypes.join('-')}-${bucket}${buster}`;
+
+    const cachedRows = getCachedPlaces(cacheKey, 12, mode === 'reroll');
+
+    const cachedPlaces: PlaceCandidate[] =
+      cachedRows.length > 0
+        ? this.dedupePlaces(
+            cachedRows
+              .map((row) => {
+                try {
+                  const parsed = JSON.parse(row.rawJSON) as PlaceCandidate;
+                  if (parsed && parsed.name && Number.isFinite(parsed.lat) && Number.isFinite(parsed.lng)) return parsed;
+                } catch {}
+                return {
+                  id: `${row.lat}-${row.lng}-${row.name}`,
+                  providerId: `${row.lat}-${row.lng}-${row.name}`,
+                  name: row.name,
+                  lat: row.lat,
+                  lng: row.lng,
+                  category: row.category,
+                  address: row.name,
+                  tags: [row.category],
+                  stopType: this.categoryToStopType(row.category),
+                } as PlaceCandidate;
+              })
+              .filter(Boolean),
+          )
+        : [];
+
+    const merged: PlaceCandidate[] = [];
+
+    if (mode === 'plan') merged.push(...cachedPlaces);
 
     if (googleApiKey && origin) {
       const googleRows = await this.searchViaGoogle(requestedStopTypes, city, origin, maxResults, googleApiKey, options);
-      const strictGoogleRows = this.filterRowsByStopTypes(googleRows, requestedStopTypes);
-      const uniqueGoogleRows = this.dedupePlaces(strictGoogleRows).slice(0, maxResults);
-      if (uniqueGoogleRows.length >= targetCount) {
-        return { places: uniqueGoogleRows, warnings };
+      merged.push(...this.filterRowsByStopTypes(googleRows, requestedStopTypes));
+
+      const uniqueSoFar = this.dedupePlaces(merged);
+      if (uniqueSoFar.length < targetCount) {
+        warnings.push(`Google Places returned only ${uniqueSoFar.length} nearby matches. Expanding with OpenStreetMap.`);
       }
-      warnings.push(`Google Places returned only ${uniqueGoogleRows.length} nearby matches. Falling back to OpenStreetMap.`);
     }
 
-    const openStreet = await this.searchViaOpenStreetMap(city, requestedStopTypes, origin, maxResults, warnings);
-    const unique = this.dedupePlaces(openStreet).slice(0, maxResults);
-    if (unique.length < targetCount) warnings.push('Not enough places found nearby.');
-    return { places: unique, warnings };
+    if (merged.length < maxResults) {
+      const openStreet = await this.searchViaOpenStreetMap(city, requestedStopTypes, origin, maxResults, warnings);
+      merged.push(...openStreet);
+    }
+
+    if (mode === 'reroll' && merged.length < targetCount && cachedPlaces.length > 0) {
+      merged.push(...cachedPlaces);
+    }
+
+    const unique = this.dedupePlaces(this.filterRowsByStopTypes(merged, requestedStopTypes));
+    shuffleInPlace(unique);
+
+    const final = unique.slice(0, maxResults);
+
+    if (origin && final.length > 0) {
+      try {
+        cachePlaces(
+          final.slice(0, 100).map((p) => ({
+            providerKey: cacheKey,
+            name: p.name,
+            lat: p.lat,
+            lng: p.lng,
+            category: p.category,
+            rawJSON: JSON.stringify(p),
+          })),
+        );
+      } catch {}
+    }
+
+    if (final.length < targetCount) warnings.push('Not enough places found nearby.');
+    return { places: final, warnings };
   }
 
   private async searchViaGoogle(
@@ -191,46 +248,47 @@ export class NominatimOverpassProvider implements PlacesProvider {
     options?: PlacesSearchOptions,
   ): Promise<PlaceCandidate[]> {
     const radiusSteps = buildRadiusSteps(options);
-    const perTypeLimit = Math.max(8, Math.min(20, Math.ceil(maxResults / Math.max(1, stopTypes.length)) + 4));
+    const mode = options?.mode ?? 'plan';
+
+    const base = Math.max(14, Math.min(30, Math.ceil(maxResults / Math.max(1, stopTypes.length)) + 8));
+    const perTypeLimit = mode === 'reroll' ? Math.min(55, base + 18) : base;
+
     const results: PlaceCandidate[] = [];
 
     for (const stopType of stopTypes) {
       if (stopType === 'attraction') {
-        const attractionRows = await this.searchGoogleAttractions(origin, city, perTypeLimit, apiKey, options);
-        results.push(...attractionRows);
+        results.push(...(await this.searchGoogleAttractions(origin, city, perTypeLimit, apiKey, options)));
         continue;
       }
 
       const policy = CATEGORY_POLICIES[stopType];
       const merged = new Map<string, GoogleNearbyPlace>();
       let usedRadius = radiusSteps[0];
-      let rawCandidates = 0;
 
       for (const radius of radiusSteps) {
         usedRadius = radius;
         const nearbyTypes = policy.nearbyTypes.length ? policy.nearbyTypes : ['point_of_interest'];
+
         for (const nearbyType of nearbyTypes) {
           const nearbyUrl = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
           nearbyUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
           nearbyUrl.searchParams.set('radius', String(radius));
           nearbyUrl.searchParams.set('type', nearbyType);
           nearbyUrl.searchParams.set('key', apiKey);
+
           const nearbyRows = await this.fetchGooglePlaces(nearbyUrl.toString(), perTypeLimit);
-          rawCandidates += nearbyRows.length;
           nearbyRows.forEach((row) => merged.set(row.place_id, row));
         }
 
-        if (merged.size < perTypeLimit) {
-          for (const query of policy.queryTerms) {
-            const textUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
-            textUrl.searchParams.set('query', query);
-            textUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
-            textUrl.searchParams.set('radius', String(radius));
-            textUrl.searchParams.set('key', apiKey);
-            const textRows = await this.fetchGooglePlaces(textUrl.toString(), perTypeLimit);
-            rawCandidates += textRows.length;
-            textRows.forEach((row) => merged.set(row.place_id, row));
-          }
+        for (const query of policy.queryTerms) {
+          const textUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
+          textUrl.searchParams.set('query', `${query} in ${city}`);
+          textUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
+          textUrl.searchParams.set('radius', String(radius));
+          textUrl.searchParams.set('key', apiKey);
+
+          const textRows = await this.fetchGooglePlaces(textUrl.toString(), perTypeLimit);
+          textRows.forEach((row) => merged.set(row.place_id, row));
         }
 
         const filteredCount = Array.from(merged.values()).filter((row) => {
@@ -239,28 +297,21 @@ export class NominatimOverpassProvider implements PlacesProvider {
           if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
           return haversineKm(origin.lat, origin.lng, Number(lat), Number(lng)) * 1000 <= radius;
         }).length;
+
         if (filteredCount >= perTypeLimit) break;
       }
 
       const acceptedRows: PlaceCandidate[] = [];
-      const debugRows: Array<{
-        name: string;
-        accepted: boolean;
-        score: number;
-        reasons: string[];
-        distanceKm: number;
-        types: string[];
-        rating?: number;
-        reviewCount?: number;
-      }> = [];
 
       for (const row of merged.values()) {
         const geometry = await this.resolveGoogleGeometry(row, apiKey);
         const lat = geometry?.lat;
         const lng = geometry?.lng;
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
         const name = (row.name || '').trim();
         if (!name) continue;
+
         const distanceKm = haversineKm(origin.lat, origin.lng, Number(lat), Number(lng));
         if (distanceKm * 1000 > usedRadius) continue;
 
@@ -269,19 +320,8 @@ export class NominatimOverpassProvider implements PlacesProvider {
           address: row.vicinity || row.formatted_address || '',
           types: row.types || [],
         });
-
-        debugRows.push({
-          name,
-          accepted: evaluation.accepted,
-          score: evaluation.score,
-          reasons: evaluation.reasons,
-          distanceKm,
-          types: row.types || [],
-          rating: row.rating,
-          reviewCount: row.user_ratings_total,
-        });
-
         if (!evaluation.accepted) continue;
+
         acceptedRows.push({
           id: row.place_id || `${name}-${lat}-${lng}`,
           providerId: row.place_id,
@@ -307,27 +347,10 @@ export class NominatimOverpassProvider implements PlacesProvider {
       }
 
       if (isDev) {
-        const topDebug = debugRows
-          .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
-          .slice(0, 10)
-          .map((row) => ({
-            name: row.name,
-            accepted: row.accepted,
-            score: row.score,
-            reasons: row.reasons,
-            distanceKm: Math.round(row.distanceKm * 10) / 10,
-            types: row.types,
-            rating: row.rating,
-            reviewCount: row.reviewCount,
-          }));
-        console.log('[places][debug]', {
+        console.log('[places][google]', {
           stopType,
-          center: origin,
           radiusUsed: usedRadius,
-          queryTerms: policy.queryTerms,
-          rawCandidates,
-          filteredCandidates: acceptedRows.length,
-          topCandidates: topDebug,
+          candidates: acceptedRows.length,
         });
       }
 
@@ -338,13 +361,34 @@ export class NominatimOverpassProvider implements PlacesProvider {
   }
 
   private async fetchGooglePlaces(url: string, limit: number): Promise<GoogleNearbyPlace[]> {
-    try {
-      const response = await fetch(url);
-      const json = (await response.json()) as { results?: GoogleNearbyPlace[] };
-      return (json.results || []).slice(0, limit);
-    } catch {
-      return [];
+    const all: GoogleNearbyPlace[] = [];
+    let pageUrl = url;
+
+    for (let page = 0; page < 3 && all.length < limit; page += 1) {
+      try {
+        const response = await fetch(pageUrl);
+        const json = (await response.json()) as { results?: GoogleNearbyPlace[]; next_page_token?: string };
+
+        const rows = json.results || [];
+        for (const r of rows) {
+          all.push(r);
+          if (all.length >= limit) break;
+        }
+
+        const token = json.next_page_token;
+        if (!token || all.length >= limit) break;
+
+        await new Promise((res) => setTimeout(res, 1600));
+
+        const next = new URL(url);
+        next.searchParams.set('pagetoken', token);
+        pageUrl = next.toString();
+      } catch {
+        break;
+      }
     }
+
+    return all.slice(0, limit);
   }
 
   private async fetchGooglePlaceDetails(placeId: string, apiKey: string): Promise<GooglePlaceDetailsResponse['result'] | null> {
@@ -364,30 +408,14 @@ export class NominatimOverpassProvider implements PlacesProvider {
   private async resolveGoogleGeometry(row: GoogleNearbyPlace, apiKey: string): Promise<{ lat: number; lng: number } | null> {
     const lat = row.geometry?.location?.lat;
     const lng = row.geometry?.location?.lng;
-    if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      return { lat: Number(lat), lng: Number(lng) };
-    }
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat: Number(lat), lng: Number(lng) };
+
     if (!row.place_id) return null;
     const details = await this.fetchGooglePlaceDetails(row.place_id, apiKey);
     const detailLat = details?.geometry?.location?.lat;
     const detailLng = details?.geometry?.location?.lng;
     if (!Number.isFinite(detailLat) || !Number.isFinite(detailLng)) return null;
     return { lat: Number(detailLat), lng: Number(detailLng) };
-  }
-
-  private attractionScore(input: {
-    row: GoogleNearbyPlace;
-    distanceKm: number;
-    evaluationScore: number;
-  }) {
-    const rating = Math.max(0, Math.min(5, input.row.rating || 0));
-    const reviewCount = Math.max(0, input.row.user_ratings_total || 0);
-    const normalizedRating = rating / 5;
-    const normalizedDistance = Math.max(0, Math.min(1, input.distanceKm / 80));
-    const reviewSignal = Math.log10(reviewCount + 1);
-    const lowerName = (input.row.name || '').toLowerCase();
-    const brandBoost = MAJOR_ATTRACTION_BRAND_TERMS.some((term) => lowerName.includes(term)) ? 0.6 : 0;
-    return input.evaluationScore + normalizedRating * 4 + reviewSignal * 1.2 - normalizedDistance * 1.8 + brandBoost;
   }
 
   private async searchGoogleAttractions(
@@ -399,135 +427,40 @@ export class NominatimOverpassProvider implements PlacesProvider {
   ): Promise<PlaceCandidate[]> {
     const policy = CATEGORY_POLICIES.attraction;
     const merged = new Map<string, GoogleNearbyPlace>();
-    const topDebug: Array<{
-      name: string;
-      accepted: boolean;
-      reasons: string[];
-      score: number;
-      rating?: number;
-      reviewCount?: number;
-      distanceKm: number;
-      radius: number;
-      pass: 'A' | 'B';
-      types: string[];
-    }> = [];
-    let rawCandidates = 0;
-    let filteredCandidates = 0;
-    let selectedRadius = ATTRACTION_RADIUS_STEPS[0];
-
-    const requestedMin = Math.max(20, perTypeLimit);
     const radiusSteps = options ? Array.from(new Set([...ATTRACTION_RADIUS_STEPS])) : ATTRACTION_RADIUS_STEPS;
-    const passAQueries = policy.queryTerms;
-    const passBQueries = MAJOR_ATTRACTION_SEEDS;
+
+    const requestedMin = Math.max(24, perTypeLimit);
 
     for (const radius of radiusSteps) {
-      selectedRadius = radius;
-      const rawBefore = rawCandidates;
       for (const nearbyType of policy.nearbyTypes) {
         const nearbyUrl = new URL('https://maps.googleapis.com/maps/api/place/nearbysearch/json');
         nearbyUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
         nearbyUrl.searchParams.set('radius', String(radius));
         nearbyUrl.searchParams.set('type', nearbyType);
         nearbyUrl.searchParams.set('key', apiKey);
+
         const nearbyRows = await this.fetchGooglePlaces(nearbyUrl.toString(), requestedMin);
-        rawCandidates += nearbyRows.length;
         nearbyRows.forEach((row) => merged.set(row.place_id, row));
       }
 
-      for (const query of passAQueries) {
+      for (const query of policy.queryTerms) {
         const textUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
         textUrl.searchParams.set('query', `${query} in ${city}`);
         textUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
         textUrl.searchParams.set('radius', String(radius));
         textUrl.searchParams.set('key', apiKey);
+
         const textRows = await this.fetchGooglePlaces(textUrl.toString(), requestedMin);
-        rawCandidates += textRows.length;
         textRows.forEach((row) => merged.set(row.place_id, row));
       }
 
-      const passAFiltered = await this.filterAttractionCandidates(merged, origin, radius, apiKey, topDebug, 'A');
-      filteredCandidates = passAFiltered.length;
-      if (isDev) {
-        console.log('[places][debug][attraction][passA]', {
-          center: origin,
-          radius,
-          queryTerms: passAQueries,
-          rawCandidates: rawCandidates - rawBefore,
-          filteredCandidates,
-        });
-      }
-      if (filteredCandidates >= requestedMin) {
-        if (isDev) {
-          console.log('[places][debug][attraction][selected]', {
-            center: origin,
-            radiusUsed: radius,
-            pass: 'A',
-            rawCandidates,
-            filteredCandidates,
-            topCandidates: topDebug
-              .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
-              .slice(0, 10),
-          });
-        }
-        return passAFiltered.slice(0, perTypeLimit);
-      }
-
-      const rawBeforeSeeds = rawCandidates;
-      for (const seed of passBQueries) {
-        const seedUrl = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
-        seedUrl.searchParams.set('query', `${seed} in ${city}`);
-        seedUrl.searchParams.set('location', `${origin.lat},${origin.lng}`);
-        seedUrl.searchParams.set('radius', String(radius));
-        seedUrl.searchParams.set('key', apiKey);
-        const seedRows = await this.fetchGooglePlaces(seedUrl.toString(), requestedMin);
-        rawCandidates += seedRows.length;
-        seedRows.forEach((row) => merged.set(row.place_id, row));
-      }
-
-      const passABFiltered = await this.filterAttractionCandidates(merged, origin, radius, apiKey, topDebug, 'B');
-      filteredCandidates = passABFiltered.length;
-      if (isDev) {
-        console.log('[places][debug][attraction][passB]', {
-          center: origin,
-          radius,
-          queryTerms: passBQueries,
-          rawCandidates: rawCandidates - rawBeforeSeeds,
-          filteredCandidates,
-        });
-      }
-      if (filteredCandidates >= requestedMin) {
-        if (isDev) {
-          console.log('[places][debug][attraction][selected]', {
-            center: origin,
-            radiusUsed: radius,
-            pass: 'B',
-            rawCandidates,
-            filteredCandidates,
-            topCandidates: topDebug
-              .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
-              .slice(0, 10),
-          });
-        }
-        return passABFiltered.slice(0, perTypeLimit);
-      }
+      const filtered = await this.filterAttractionCandidates(merged, origin, radius, apiKey);
+      if (filtered.length >= requestedMin) return filtered.slice(0, perTypeLimit);
     }
 
-    const fallbackRows = await this.filterAttractionCandidates(merged, origin, selectedRadius, apiKey, topDebug, 'B');
-    if (isDev) {
-      console.log('[places][debug][attraction]', {
-        stopType: 'attraction',
-        center: origin,
-        radiusUsed: selectedRadius,
-        passAQueries,
-        passBQueries,
-        rawCandidates,
-        filteredCandidates: fallbackRows.length,
-        topCandidates: topDebug
-          .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.score - a.score)
-          .slice(0, 10),
-      });
-    }
-    return fallbackRows.slice(0, perTypeLimit);
+    const lastRadius = radiusSteps[radiusSteps.length - 1] ?? 60000;
+    const fallback = await this.filterAttractionCandidates(merged, origin, lastRadius, apiKey);
+    return fallback.slice(0, perTypeLimit);
   }
 
   private async filterAttractionCandidates(
@@ -535,28 +468,18 @@ export class NominatimOverpassProvider implements PlacesProvider {
     origin: SearchOrigin,
     radius: number,
     apiKey: string,
-    debugRows: Array<{
-      name: string;
-      accepted: boolean;
-      reasons: string[];
-      score: number;
-      rating?: number;
-      reviewCount?: number;
-      distanceKm: number;
-      radius: number;
-      pass: 'A' | 'B';
-      types: string[];
-    }>,
-    pass: 'A' | 'B',
-  ) {
-    const acceptedRows: Array<{ candidate: PlaceCandidate; score: number }> = [];
+  ): Promise<PlaceCandidate[]> {
+    const acceptedRows: PlaceCandidate[] = [];
+
     for (const row of merged.values()) {
       const geometry = await this.resolveGoogleGeometry(row, apiKey);
       const lat = geometry?.lat;
       const lng = geometry?.lng;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
       const name = (row.name || '').trim();
       if (!name) continue;
+
       const distanceKm = haversineKm(origin.lat, origin.lng, Number(lat), Number(lng));
       if (distanceKm * 1000 > radius) continue;
 
@@ -565,50 +488,35 @@ export class NominatimOverpassProvider implements PlacesProvider {
         address: row.vicinity || row.formatted_address || '',
         types: row.types || [],
       });
-      const score = this.attractionScore({ row, distanceKm, evaluationScore: evaluation.score });
-      const accepted = evaluation.accepted;
-      debugRows.push({
+
+      if (!evaluation.accepted) continue;
+
+      acceptedRows.push({
+        id: row.place_id || `${name}-${lat}-${lng}`,
+        providerId: row.place_id,
         name,
-        accepted,
-        reasons: evaluation.reasons,
-        score,
+        lat: Number(lat),
+        lng: Number(lng),
+        category: this.categoryFromGoogleTypes(row.types || [], 'attraction'),
+        address: row.vicinity || row.formatted_address || 'Address unavailable',
+        tags: row.types || ['attraction'],
+        costLevel: toCostLevel(row.price_level),
+        stopType: 'attraction',
+        openNow: row.opening_hours?.open_now,
         rating: row.rating,
         reviewCount: row.user_ratings_total,
-        distanceKm,
-        radius,
-        pass,
-        types: row.types || [],
-      });
-      if (!accepted) continue;
-      acceptedRows.push({
-        score,
-        candidate: {
-          id: row.place_id || `${name}-${lat}-${lng}`,
-          providerId: row.place_id,
-          name,
-          lat: Number(lat),
-          lng: Number(lng),
-          category: this.categoryFromGoogleTypes(row.types || [], 'attraction'),
-          address: row.vicinity || row.formatted_address || 'Address unavailable',
-          tags: row.types || ['attraction'],
-          costLevel: toCostLevel(row.price_level),
-          stopType: 'attraction',
-          openNow: row.opening_hours?.open_now,
-          rating: row.rating,
-          reviewCount: row.user_ratings_total,
-          priceLevel: row.price_level,
-          openingHoursText:
-            typeof row.opening_hours?.open_now === 'boolean'
-              ? row.opening_hours?.open_now
-                ? 'Open now'
-                : 'Closed now'
-              : undefined,
-        },
+        priceLevel: row.price_level,
+        openingHoursText:
+          typeof row.opening_hours?.open_now === 'boolean'
+            ? row.opening_hours?.open_now
+              ? 'Open now'
+              : 'Closed now'
+            : undefined,
       });
     }
 
-    acceptedRows.sort((a, b) => b.score - a.score);
-    return acceptedRows.map((row) => row.candidate);
+    acceptedRows.sort((a, b) => (b.rating || 0) - (a.rating || 0) || (b.reviewCount || 0) - (a.reviewCount || 0));
+    return acceptedRows;
   }
 
   private async searchViaOpenStreetMap(
@@ -637,12 +545,15 @@ export class NominatimOverpassProvider implements PlacesProvider {
 
       const query = this.buildOverpassQuery(centerLat, centerLng, stopTypes);
       await waitIfNeeded();
+
       const overpass = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: query,
       });
+
       const overpassJson = (await overpass.json()) as { elements?: OverpassElement[] };
+
       const rows = (overpassJson.elements || [])
         .filter((element) => typeof element.lat === 'number' && typeof element.lon === 'number' && element.tags?.name)
         .slice(0, maxResults)
@@ -659,7 +570,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
             tags: Object.values(tags).map(String),
             costLevel: this.costLevelFromTags(tags),
             stopType: this.stopTypeFromTags(tags),
-          };
+          } as PlaceCandidate;
         });
 
       const filtered = this.filterRowsByStopTypes(rows, stopTypes);
@@ -667,8 +578,7 @@ export class NominatimOverpassProvider implements PlacesProvider {
       if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
       return filtered.slice(0, maxResults);
     } catch {
-      const nominatimFallback = await this.searchViaNominatim(city, stopTypes, origin, maxResults, warnings);
-      return nominatimFallback;
+      return this.searchViaNominatim(city, stopTypes, origin, maxResults, warnings);
     }
   }
 
@@ -684,7 +594,99 @@ export class NominatimOverpassProvider implements PlacesProvider {
   node(around:6500,${lat},${lng})[name][leisure~"${pattern}",i];
   node(around:6500,${lat},${lng})[name][shop~"${pattern}",i];
 );
-out body 80;`;
+out body 120;`;
+  }
+
+  private async searchViaNominatim(
+    city: string,
+    stopTypes: StopType[],
+    origin?: SearchOrigin,
+    maxResults = 60,
+    warnings?: string[],
+  ): Promise<PlaceCandidate[]> {
+    const keywords = this.fallbackKeywords(stopTypes);
+    const results: PlaceCandidate[] = [];
+    const seen = new Set<string>();
+    const perQueryLimit = Math.min(22, Math.max(12, Math.ceil(maxResults / Math.max(1, keywords.length)) + 4));
+
+    for (const entry of keywords) {
+      await waitIfNeeded();
+
+      const query = `${entry.keyword} near ${city}`;
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=jsonv2&limit=${perQueryLimit}`;
+      const response = await fetch(url, { headers: { 'User-Agent': 'TakeMeOut/1.0' } });
+      const json = (await response.json()) as NominatimPlace[];
+
+      for (const row of json) {
+        const lat = Number(row.lat);
+        const lng = Number(row.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        if (origin && haversineKm(origin.lat, origin.lng, lat, lng) > 60) continue;
+
+        const dedupe = `${lat.toFixed(4)}-${lng.toFixed(4)}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+
+        results.push({
+          id: String(row.place_id),
+          providerId: String(row.place_id),
+          name: row.name || this.titleFromDisplayName(row.display_name),
+          lat,
+          lng,
+          category: this.categoryFromTags({ type: row.type || '', class: row.class || '', keyword: entry.keyword }),
+          address: row.display_name,
+          tags: [entry.keyword, row.type || '', row.class || ''].filter(Boolean),
+          costLevel: '$$',
+          stopType: entry.stopType,
+        });
+      }
+    }
+
+    const filtered = this.filterRowsByStopTypes(results, stopTypes);
+    const missingTypes = stopTypes.filter((type) => !filtered.some((row) => row.stopType === type));
+    if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
+    return filtered.slice(0, maxResults);
+  }
+
+  private fallbackKeywords(stopTypes: StopType[]) {
+    const entries: Array<{ keyword: string; stopType: StopType }> = [];
+    const selected: StopType[] = stopTypes.length ? stopTypes : ['activity', 'outdoors'];
+
+    for (const stopType of selected) {
+      const option = STOP_TYPE_OPTIONS.find((item) => item.id === stopType);
+      if (!option) continue;
+      option.queryKeywords.forEach((keyword) => entries.push({ keyword, stopType }));
+    }
+
+    const seen = new Set<string>();
+    return entries.filter((entry) => {
+      const key = `${entry.stopType}:${entry.keyword}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private titleFromDisplayName(displayName: string) {
+    const first = displayName.split(',')[0]?.trim();
+    return first || 'Interesting spot';
+  }
+
+  private filterRowsByStopTypes(rows: PlaceCandidate[], requestedStopTypes: StopType[]) {
+    if (requestedStopTypes.length === 0) return rows;
+    const allowed = new Set<StopType>(requestedStopTypes);
+    return rows.filter((row) => allowed.has(row.stopType));
+  }
+
+  private categoryToStopType(category: string): StopType {
+    const lower = category.toLowerCase();
+    if (lower.includes('coffee')) return 'coffee';
+    if (lower.includes('food')) return 'restaurant';
+    if (lower.includes('shop')) return 'shopping';
+    if (lower.includes('attraction')) return 'attraction';
+    if (lower.includes('museum')) return 'arts';
+    if (lower.includes('park') || lower.includes('outdoors')) return 'outdoors';
+    return 'activity';
   }
 
   private categoryFromTags(tags: Record<string, string>) {
@@ -728,92 +730,6 @@ out body 80;`;
     return locality;
   }
 
-  private async searchViaNominatim(
-    city: string,
-    stopTypes: StopType[],
-    origin?: SearchOrigin,
-    maxResults = 60,
-    warnings?: string[],
-  ): Promise<PlaceCandidate[]> {
-    const keywords = this.fallbackKeywords(stopTypes);
-    const results: PlaceCandidate[] = [];
-    const seen = new Set<string>();
-    const perQueryLimit = Math.min(16, Math.max(8, Math.ceil(maxResults / Math.max(1, keywords.length)) + 2));
-
-    for (const entry of keywords) {
-      await waitIfNeeded();
-      const query = `${entry.keyword} near ${city}`;
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=jsonv2&limit=${perQueryLimit}`;
-      const response = await fetch(url, { headers: { 'User-Agent': 'TakeMeOut/1.0' } });
-      const json = (await response.json()) as NominatimPlace[];
-      for (const row of json) {
-        const lat = Number(row.lat);
-        const lng = Number(row.lon);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-        if (origin && haversineKm(origin.lat, origin.lng, lat, lng) > 60) continue;
-        const dedupe = `${lat.toFixed(4)}-${lng.toFixed(4)}`;
-        if (seen.has(dedupe)) continue;
-        seen.add(dedupe);
-        results.push({
-          id: String(row.place_id),
-          providerId: String(row.place_id),
-          name: row.name || this.titleFromDisplayName(row.display_name),
-          lat,
-          lng,
-          category: this.categoryFromTags({ type: row.type || '', class: row.class || '', keyword: entry.keyword }),
-          address: row.display_name,
-          tags: [entry.keyword, row.type || '', row.class || ''].filter(Boolean),
-          costLevel: '$$',
-          stopType: entry.stopType,
-        });
-      }
-    }
-
-    const filtered = this.filterRowsByStopTypes(results, stopTypes);
-    const missingTypes = stopTypes.filter((type) => !filtered.some((row) => row.stopType === type));
-    if (missingTypes.length > 0 && warnings) warnings.push(`Limited results for ${missingTypes.join(', ')}.`);
-    return filtered.slice(0, maxResults);
-  }
-
-  private fallbackKeywords(stopTypes: StopType[]) {
-    const entries: Array<{ keyword: string; stopType: StopType }> = [];
-    const selected: StopType[] = stopTypes.length ? stopTypes : ['activity', 'outdoors'];
-    for (const stopType of selected) {
-      const option = STOP_TYPE_OPTIONS.find((item) => item.id === stopType);
-      if (!option) continue;
-      option.queryKeywords.forEach((keyword) => entries.push({ keyword, stopType }));
-    }
-    const seen = new Set<string>();
-    return entries.filter((entry) => {
-      const key = `${entry.stopType}:${entry.keyword}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  private titleFromDisplayName(displayName: string) {
-    const first = displayName.split(',')[0]?.trim();
-    return first || 'Interesting spot';
-  }
-
-  private filterRowsByStopTypes(rows: PlaceCandidate[], requestedStopTypes: StopType[]) {
-    if (requestedStopTypes.length === 0) return rows;
-    const allowed = new Set<StopType>(requestedStopTypes);
-    return rows.filter((row) => allowed.has(row.stopType));
-  }
-
-  private categoryToStopType(category: string): StopType {
-    const lower = category.toLowerCase();
-    if (lower.includes('coffee')) return 'coffee';
-    if (lower.includes('food')) return 'restaurant';
-    if (lower.includes('shop')) return 'shopping';
-    if (lower.includes('attraction')) return 'attraction';
-    if (lower.includes('museum')) return 'arts';
-    if (lower.includes('park') || lower.includes('outdoors')) return 'outdoors';
-    return 'activity';
-  }
-
   private categoryFromGoogleTypes(types: string[], stopType: StopType): string {
     const joined = types.join(' ').toLowerCase();
     if (joined.includes('cafe')) return 'Coffee/Dessert';
@@ -829,7 +745,10 @@ out body 80;`;
   private dedupePlaces(rows: PlaceCandidate[]): PlaceCandidate[] {
     const seen = new Set<string>();
     return rows.filter((row) => {
-      const key = `${row.id}-${row.name.toLowerCase()}-${row.lat.toFixed(4)}-${row.lng.toFixed(4)}`;
+      const pid = row.providerId ? `pid:${row.providerId}` : '';
+      const coordKey = `${row.lat.toFixed(5)}-${row.lng.toFixed(5)}`;
+      const nameKey = row.name.toLowerCase().trim();
+      const key = `${pid}|${coordKey}|${nameKey}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;

@@ -23,6 +23,32 @@ const coerceNumber = (value: unknown, fallback = 0): number => {
   return fallback;
 };
 
+const coerceNullableNumber = (value: unknown): number | undefined => {
+  if (value == null) return undefined;
+  const n = coerceNumber(value, Number.NaN);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+const coerceNullableString = (value: unknown): string | undefined => {
+  if (value == null) return undefined;
+  if (typeof value === 'string') return value;
+  return String(value);
+};
+
+const tableHasColumn = (table: string, column: string): boolean => {
+  try {
+    const rows = db.getAllSync<{ name: string }>(`PRAGMA table_info(${table});`);
+    return rows.some((r) => r.name === column);
+  } catch {
+    return false;
+  }
+};
+
+const addColumnIfMissing = (table: string, column: string, sqlType: string) => {
+  if (tableHasColumn(table, column)) return;
+  db.execSync(`ALTER TABLE ${table} ADD COLUMN ${column} ${sqlType};`);
+};
+
 export const initDb = () => {
   db.execSync(`
     CREATE TABLE IF NOT EXISTS Plan (
@@ -40,6 +66,7 @@ export const initDb = () => {
       createdAt TEXT NOT NULL,
       returnToStart INTEGER DEFAULT 0
     );
+
     CREATE TABLE IF NOT EXISTS Stop (
       id TEXT PRIMARY KEY NOT NULL,
       planId TEXT NOT NULL,
@@ -56,12 +83,14 @@ export const initDb = () => {
       why TEXT,
       locked INTEGER DEFAULT 0
     );
+
     CREATE TABLE IF NOT EXISTS ChecklistItem (
       id TEXT PRIMARY KEY NOT NULL,
       planId TEXT NOT NULL,
       text TEXT,
       done INTEGER DEFAULT 0
     );
+
     CREATE TABLE IF NOT EXISTS CachedPlace (
       providerKey TEXT,
       name TEXT,
@@ -72,13 +101,31 @@ export const initDb = () => {
       cachedAt TEXT
     );
   `);
+
+  // --- Migrations (safe to run every boot) ---
+
+  // Plan additions
+  addColumnIfMissing('Plan', 'startLat', 'REAL');
+  addColumnIfMissing('Plan', 'startLng', 'REAL');
+
+  // Stop additions (richer place + routing + type metadata)
+  addColumnIfMissing('Stop', 'openNow', 'INTEGER');
+  addColumnIfMissing('Stop', 'rating', 'REAL');
+  addColumnIfMissing('Stop', 'openingHoursText', 'TEXT');
+  addColumnIfMissing('Stop', 'priceLevel', 'INTEGER');
+  addColumnIfMissing('Stop', 'distanceKm', 'REAL');
+  addColumnIfMissing('Stop', 'etaMin', 'INTEGER');
+  addColumnIfMissing('Stop', 'stopType', 'TEXT');
+  addColumnIfMissing('Stop', 'providerId', 'TEXT');
+  addColumnIfMissing('Stop', 'reviewCount', 'INTEGER');
 };
 
 export const savePlan = (plan: Plan, stops: Stop[]) => {
   db.withTransactionSync(() => {
     db.runSync(
-      `INSERT OR REPLACE INTO Plan (id,title,city,date,startTime,endTime,groupType,transport,pace,budget,preferencesJSON,createdAt,returnToStart)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT OR REPLACE INTO Plan (
+        id,title,city,date,startTime,endTime,groupType,transport,pace,budget,preferencesJSON,createdAt,returnToStart,startLat,startLng
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         plan.id,
         plan.title,
@@ -93,13 +140,20 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
         plan.preferencesJSON,
         plan.createdAt,
         plan.returnToStart ? 1 : 0,
+        // These may be undefined; SQLite will store NULL
+        (plan as any).startLat ?? null,
+        (plan as any).startLng ?? null,
       ],
     );
+
     db.runSync('DELETE FROM Stop WHERE planId = ?', [plan.id]);
+
     for (const s of stops) {
       db.runSync(
-        `INSERT INTO Stop (id,planId,"order",name,category,lat,lng,address,startTime,endTime,durationMin,costLevel,why,locked)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO Stop (
+          id,planId,"order",name,category,lat,lng,address,startTime,endTime,durationMin,costLevel,why,locked,
+          openNow,rating,openingHoursText,priceLevel,distanceKm,etaMin,stopType,providerId,reviewCount
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           s.id,
           s.planId,
@@ -115,6 +169,16 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
           s.costLevel,
           s.why,
           s.locked,
+
+          typeof s.openNow === 'boolean' ? (s.openNow ? 1 : 0) : null,
+          typeof s.rating === 'number' ? s.rating : null,
+          s.openingHoursText ?? null,
+          typeof s.priceLevel === 'number' ? s.priceLevel : null,
+          typeof s.distanceKm === 'number' ? s.distanceKm : null,
+          typeof s.etaMin === 'number' ? s.etaMin : null,
+          s.stopType ?? null,
+          s.providerId ?? null,
+          typeof s.reviewCount === 'number' ? s.reviewCount : null,
         ],
       );
     }
@@ -123,7 +187,14 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
 
 export const getPlans = (): Plan[] =>
   db
-    .getAllSync<Omit<Plan, 'returnToStart'> & { pace?: unknown; returnToStart: unknown }>('SELECT * FROM Plan ORDER BY createdAt DESC')
+    .getAllSync<
+      Omit<Plan, 'returnToStart'> & {
+        pace?: unknown;
+        returnToStart: unknown;
+        startLat?: unknown;
+        startLng?: unknown;
+      }
+    >('SELECT * FROM Plan ORDER BY createdAt DESC')
     .map((plan) => ({
       id: plan.id,
       title: plan.title,
@@ -131,21 +202,46 @@ export const getPlans = (): Plan[] =>
       date: plan.date,
       startTime: plan.startTime,
       endTime: plan.endTime,
-      groupType: plan.groupType,
-      transport: plan.transport,
-      budget: plan.budget,
+      groupType: plan.groupType as any,
+      transport: plan.transport as any,
+      budget: plan.budget as any,
       preferencesJSON: plan.preferencesJSON,
       createdAt: plan.createdAt,
       returnToStart: coerceBoolean(plan.returnToStart),
-    }));
+      // Optional fields (safe if your Plan type includes them; if not, they’ll just be ignored by TS if you remove them)
+      ...(tableHasColumn('Plan', 'startLat') ? { startLat: coerceNullableNumber(plan.startLat) } : {}),
+      ...(tableHasColumn('Plan', 'startLng') ? { startLng: coerceNullableNumber(plan.startLng) } : {}),
+    })) as Plan[];
 
 export const getPlanStops = (planId: string): Stop[] =>
   db
-    .getAllSync<Omit<Stop, 'locked'> & { locked: unknown }>('SELECT * FROM Stop WHERE planId = ? ORDER BY "order" ASC', [planId])
+    .getAllSync<any>('SELECT * FROM Stop WHERE planId = ? ORDER BY "order" ASC', [planId])
     .map((stop) => ({
-      ...stop,
+      id: stop.id,
+      planId: stop.planId,
+      order: coerceNumber(stop.order),
+      name: stop.name ?? '',
+      category: stop.category ?? '',
+      lat: coerceNumber(stop.lat),
+      lng: coerceNumber(stop.lng),
+      address: stop.address ?? '',
+      startTime: stop.startTime ?? '',
+      endTime: stop.endTime ?? '',
+      durationMin: coerceNumber(stop.durationMin),
+      costLevel: stop.costLevel ?? '',
+      why: stop.why ?? '',
       locked: coerceNumber(stop.locked),
-    }));
+
+      openNow: stop.openNow == null ? undefined : coerceBoolean(stop.openNow),
+      rating: coerceNullableNumber(stop.rating),
+      openingHoursText: coerceNullableString(stop.openingHoursText),
+      priceLevel: coerceNullableNumber(stop.priceLevel),
+      distanceKm: coerceNullableNumber(stop.distanceKm),
+      etaMin: coerceNullableNumber(stop.etaMin),
+      stopType: coerceNullableString(stop.stopType) as any,
+      providerId: coerceNullableString(stop.providerId),
+      reviewCount: coerceNullableNumber(stop.reviewCount),
+    })) as Stop[];
 
 export const saveChecklist = (items: ChecklistItem[]) => {
   db.withTransactionSync(() => {
@@ -175,6 +271,14 @@ export const cachePlaces = (rows: { providerKey: string; name: string; lat: numb
   });
 };
 
+export const clearCachedPlaces = (providerKey?: string) => {
+  if (providerKey) {
+    db.runSync('DELETE FROM CachedPlace WHERE providerKey = ?', [providerKey]);
+    return;
+  }
+  db.runSync('DELETE FROM CachedPlace');
+};
+
 interface CachedPlaceRow {
   providerKey: string;
   name: string;
@@ -185,10 +289,15 @@ interface CachedPlaceRow {
   cachedAt: string;
 }
 
-export const getCachedPlaces = (providerKey: string, maxAgeHours = 12): CachedPlaceRow[] => {
+/**
+ * Returns recently cached places for a providerKey.
+ * Set bypass=true to force a fresh provider fetch.
+ */
+export const getCachedPlaces = (providerKey: string, maxAgeHours = 12, bypass = false): CachedPlaceRow[] => {
+  if (bypass) return [];
   const cutoff = new Date(Date.now() - maxAgeHours * 3600_000).toISOString();
   return db.getAllSync<CachedPlaceRow>(
-    'SELECT * FROM CachedPlace WHERE providerKey = ? AND cachedAt > ? ORDER BY cachedAt DESC LIMIT 100',
+    'SELECT * FROM CachedPlace WHERE providerKey = ? AND cachedAt > ? ORDER BY cachedAt DESC LIMIT 120',
     [providerKey, cutoff],
   );
 };

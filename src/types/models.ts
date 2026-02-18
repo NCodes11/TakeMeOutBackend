@@ -1,13 +1,23 @@
 export type GroupType = 'Date' | 'Family' | 'Friends';
 export type TransportType = 'walk' | 'drive';
 export type BudgetType = '$' | '$$' | '$$$';
-export type StopType = 'coffee' | 'restaurant' | 'bar' | 'dessert' | 'activity' | 'outdoors' | 'shopping' | 'arts' | 'attraction';
+
+export type StopType =
+  | 'coffee'
+  | 'restaurant'
+  | 'bar'
+  | 'dessert'
+  | 'activity'
+  | 'outdoors'
+  | 'shopping'
+  | 'arts'
+  | 'attraction';
 
 export interface PlanPreferences {
   interests: string[];
   avoid: string[];
   mustInclude: string;
-  maxTravelMinutes: number;
+  maxTravelMinutes?: number;
   kidFriendly: boolean;
   accessibleFriendly: boolean;
 }
@@ -25,6 +35,10 @@ export interface Plan {
   preferencesJSON: string;
   createdAt: string;
   returnToStart: boolean;
+
+  /** Origin used for place search and rerolls (enables Google Places nearby search). */
+  startLat?: number;
+  startLng?: number;
 }
 
 export interface Stop {
@@ -36,18 +50,22 @@ export interface Stop {
   lat: number;
   lng: number;
   address: string;
+
   startTime: string;
   endTime: string;
   durationMin: number;
+
   costLevel: string;
   why: string;
   locked: number;
+
   openNow?: boolean;
   rating?: number;
   openingHoursText?: string;
   priceLevel?: number;
   distanceKm?: number;
   etaMin?: number;
+
   stopType?: StopType;
   providerId?: string;
   reviewCount?: number;
@@ -78,32 +96,42 @@ export interface PlaceCandidate {
   lng: number;
   category: string;
   address: string;
+
   costLevel?: string;
   openNow?: boolean;
   rating?: number;
   reviewCount?: number;
   openingHoursText?: string;
   priceLevel?: number;
+
   tags: string[];
   stopType: StopType;
 }
 
 export interface WizardInput {
   city: string;
+
+  /** Optional origin for nearby search. When present, enables Google Places nearby results. */
   startLat?: number;
   startLng?: number;
+
   stopCount: number;
   date: string;
   startTime: string;
   endTime: string;
+
   groupType: GroupType;
   adults: number;
   kids: number;
   kidAges: number[];
+
   transport: TransportType;
   budget: BudgetType;
+
   preferences: PlanPreferences;
+
   startLocationMode: 'my-location' | 'custom';
   startAddress: string;
+
   returnToStart: boolean;
 }
