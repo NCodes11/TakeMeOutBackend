@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { ChecklistItem, FeatureRequest, Plan, Stop, TripFeedback } from '@/types/models';
+import { BudgetType, ChecklistItem, FeatureRequest, Plan, Stop, TripFeedback } from '@/types/models';
 
 const db = SQLite.openDatabaseSync('daydate.db');
 
@@ -39,7 +39,7 @@ interface TripFeedbackRow {
   locationCity?: unknown;
   locationState?: unknown;
   stopCount?: unknown;
-  priceTier: string;
+  priceTier?: unknown; // <- was string; SQLite returns unknown-ish shapes sometimes
   distancePreference?: unknown;
 }
 
@@ -82,6 +82,17 @@ const coerceNullableString = (value: unknown): string | undefined => {
   if (value == null) return undefined;
   if (typeof value === 'string') return value;
   return String(value);
+};
+
+const isBudgetType = (value: unknown): value is BudgetType => value === '$' || value === '$$' || value === '$$$';
+
+const coerceBudgetType = (value: unknown, fallback: BudgetType = '$$'): BudgetType => {
+  if (isBudgetType(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (isBudgetType(trimmed)) return trimmed;
+  }
+  return fallback;
 };
 
 const tableHasColumn = (table: string, column: string): boolean => {
@@ -174,13 +185,10 @@ export const initDb = () => {
     );
   `);
 
-  // --- Migrations (safe to run every boot) ---
-
-  // Plan additions
+  // Safe migrations (run every boot)
   addColumnIfMissing('Plan', 'startLat', 'REAL');
   addColumnIfMissing('Plan', 'startLng', 'REAL');
 
-  // Stop additions (richer place + routing + type metadata)
   addColumnIfMissing('Stop', 'openNow', 'INTEGER');
   addColumnIfMissing('Stop', 'rating', 'REAL');
   addColumnIfMissing('Stop', 'openingHoursText', 'TEXT');
@@ -212,9 +220,8 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
         plan.preferencesJSON,
         plan.createdAt,
         plan.returnToStart ? 1 : 0,
-        // These may be undefined; SQLite will store NULL
-        plan.startLat ?? null,
-        plan.startLng ?? null,
+        (plan as any).startLat ?? null,
+        (plan as any).startLng ?? null,
       ],
     );
 
@@ -280,7 +287,6 @@ export const getPlans = (): Plan[] =>
       preferencesJSON: plan.preferencesJSON,
       createdAt: plan.createdAt,
       returnToStart: coerceBoolean(plan.returnToStart),
-      // Optional fields (safe if your Plan type includes them; if not, they’ll just be ignored by TS if you remove them)
       ...(tableHasColumn('Plan', 'startLat') ? { startLat: coerceNullableNumber(plan.startLat) } : {}),
       ...(tableHasColumn('Plan', 'startLng') ? { startLng: coerceNullableNumber(plan.startLng) } : {}),
     })) as Plan[];
@@ -292,16 +298,16 @@ export const getPlanStops = (planId: string): Stop[] =>
       id: stop.id,
       planId: stop.planId,
       order: coerceNumber(stop.order),
-      name: stop.name ?? '',
-      category: stop.category ?? '',
+      name: String(stop.name ?? ''),
+      category: String(stop.category ?? ''),
       lat: coerceNumber(stop.lat),
       lng: coerceNumber(stop.lng),
-      address: stop.address ?? '',
-      startTime: stop.startTime ?? '',
-      endTime: stop.endTime ?? '',
+      address: String(stop.address ?? ''),
+      startTime: String(stop.startTime ?? ''),
+      endTime: String(stop.endTime ?? ''),
       durationMin: coerceNumber(stop.durationMin),
-      costLevel: stop.costLevel ?? '',
-      why: stop.why ?? '',
+      costLevel: String(stop.costLevel ?? ''),
+      why: String(stop.why ?? ''),
       locked: coerceNumber(stop.locked),
 
       openNow: stop.openNow == null ? undefined : coerceBoolean(stop.openNow),
@@ -332,7 +338,6 @@ export const getChecklist = (planId: string): ChecklistItem[] =>
   db.getAllSync<ChecklistItem>('SELECT * FROM ChecklistItem WHERE planId = ?', [planId]);
 
 export const saveTripFeedback = (entry: TripFeedback) => {
-  // Local-first write: feedback is retained offline and can be exported/synced later.
   db.runSync(
     `INSERT OR REPLACE INTO TripFeedback (
       id,tripId,timestamp,thumbsUp,feedbackText,selectedStopTypesJSON,locationCity,locationState,stopCount,priceTier,distancePreference
@@ -347,7 +352,7 @@ export const saveTripFeedback = (entry: TripFeedback) => {
       entry.locationCity ?? null,
       entry.locationState ?? null,
       entry.stopCount,
-      entry.priceTier,
+      entry.priceTier, // stored as TEXT
       typeof entry.distancePreference === 'number' ? entry.distancePreference : null,
     ],
   );
@@ -361,7 +366,6 @@ export const saveFeatureRequest = (entry: FeatureRequest) => {
 };
 
 export const getTripFeedback = (): TripFeedback[] =>
-  // Read helpers normalize SQLite primitives back into app-level types.
   db.getAllSync<TripFeedbackRow>('SELECT * FROM TripFeedback ORDER BY timestamp DESC').map((row) => ({
     id: row.id,
     tripId: row.tripId,
@@ -370,7 +374,7 @@ export const getTripFeedback = (): TripFeedback[] =>
     feedbackText: coerceNullableString(row.feedbackText),
     selectedStopTypes: (() => {
       try {
-        const parsed = JSON.parse(row.selectedStopTypesJSON ?? '[]');
+        const parsed = JSON.parse(String(row.selectedStopTypesJSON ?? '[]'));
         return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [];
       } catch {
         return [];
@@ -379,17 +383,17 @@ export const getTripFeedback = (): TripFeedback[] =>
     locationCity: coerceNullableString(row.locationCity),
     locationState: coerceNullableString(row.locationState),
     stopCount: coerceNumber(row.stopCount),
-    priceTier: row.priceTier,
+    priceTier: coerceBudgetType(row.priceTier, '$$'), // ✅ FIX: always return BudgetType
     distancePreference: coerceNullableNumber(row.distancePreference),
   }));
 
 export const getFeatureRequests = (): FeatureRequest[] =>
   db.getAllSync<FeatureRequestRow>('SELECT * FROM FeatureRequest ORDER BY timestamp DESC').map((row) => ({
     id: row.id,
-    message: row.message ?? '',
+    message: String(row.message ?? ''),
     category: coerceNullableString(row.category) as FeatureRequest['category'],
     timestamp: row.timestamp,
-    appVersion: row.appVersion ?? '',
+    appVersion: String(row.appVersion ?? ''),
     deviceType: (row.deviceType as FeatureRequest['deviceType']) ?? 'ios',
   }));
 
@@ -423,10 +427,6 @@ interface CachedPlaceRow {
   cachedAt: string;
 }
 
-/**
- * Returns recently cached places for a providerKey.
- * Set bypass=true to force a fresh provider fetch.
- */
 export const getCachedPlaces = (providerKey: string, maxAgeHours = 12, bypass = false): CachedPlaceRow[] => {
   if (bypass) return [];
   const cutoff = new Date(Date.now() - maxAgeHours * 3600_000).toISOString();
