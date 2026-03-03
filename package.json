@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "main": "expo-router/entry",
+  "bin": {
+    "install": "./scripts/install.js"
+  },
   "scripts": {
+    "postinstall": "chmod +x node_modules/.bin/expo || true",
     "start": "expo start",
     "ios": "expo run:ios",
     "android": "expo run:android",
@@ -21,7 +25,7 @@
     "expo-router": "~6.0.23",
 
     "expo-asset": "~12.0.5",
-    "expo-crypto": "~14.0.2",
+    "expo-crypto": "~15.0.8",
     "expo-constants": "~18.0.13",
     "expo-linking": "~8.0.8",
 
