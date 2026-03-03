@@ -18,7 +18,6 @@ export interface PlanPreferences {
   avoid: string[];
   mustInclude: string;
   maxTravelMinutes?: number;
-  kidFriendly: boolean;
   accessibleFriendly: boolean;
 }
 
@@ -100,6 +99,9 @@ export interface TripFeedback {
   stopCount: number;
   priceTier: BudgetType;
   distancePreference?: number;
+  appVersion?: string;
+  deviceType?: 'ios' | 'android' | 'web';
+  platform?: 'ios' | 'android' | 'web';
 }
 
 export type FeatureRequestCategory = 'New Feature' | 'Bug Report' | 'UI Improvement' | 'Other';
@@ -111,6 +113,7 @@ export interface FeatureRequest {
   timestamp: string;
   appVersion: string;
   deviceType: 'ios' | 'android' | 'web';
+  platform?: 'ios' | 'android' | 'web';
 }
 
 export interface PlaceCandidate {
@@ -152,6 +155,7 @@ export interface WizardInput {
 
   transport: TransportType;
   budget: BudgetType;
+  feelingLucky: boolean;
 
   preferences: PlanPreferences;
 

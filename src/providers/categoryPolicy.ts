@@ -5,8 +5,6 @@ export interface CategoryPolicy {
   denyTypes: string[];
   positiveKeywords: string[];
   denyKeywords: string[];
-  nearbyTypes: string[];
-  queryTerms: string[];
 }
 
 export interface CategoryEvalInput {
@@ -22,217 +20,267 @@ export interface CategoryEvalResult {
 }
 
 /**
- * Global hard-deny keywords across all categories.
- * These eliminate grocery stores, big box chains, etc.
+ * Types to hard-reject across the entire app (regardless of stopType),
+ * because you explicitly don't want these suggested.
  */
-const GLOBAL_DENY_KEYWORDS = [
-  'walmart',
-  'target',
-  'costco',
-  'kroger',
-  'publix',
-  'aldi',
-  'whole foods',
-  'trader joe',
-  'pharmacy',
-  'cvs',
-  'walgreens',
-  'supercenter',
-  'grocery',
-  'market',
-  'liquor store',
-  'dollar general',
-];
-
-/**
- * Hard deny place types across all categories.
- */
-const GLOBAL_DENY_TYPES = [
-  'grocery_or_supermarket',
+const GLOBAL_DENY_TYPES = new Set<string>([
+  'movie_theater',
+  'grocery_store',
   'supermarket',
+  'grocery_or_supermarket',
   'convenience_store',
-  'pharmacy',
-  'drugstore',
-  'gas_station',
-  'hardware_store',
-  'car_dealer',
-  'car_rental',
-  'atm',
-  'bank',
+  'wholesaler',
+]);
+
+const GLOBAL_DENY_KEYWORDS = [
+  'movie theater',
+  'cinema',
+  'cine',
+  'theatre',
+  'theater',
+  'grocery',
+  'supermarket',
+  'convenience store',
 ];
 
 export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
-  restaurant: {
-    allowTypes: ['restaurant', 'meal_takeaway', 'food'],
-    denyTypes: ['store', 'shopping_mall', ...GLOBAL_DENY_TYPES],
-    positiveKeywords: ['restaurant', 'grill', 'kitchen', 'diner', 'eatery'],
-    denyKeywords: [],
-    nearbyTypes: ['restaurant'],
-    queryTerms: ['restaurants near me', 'best food near me'],
-  },
-
-  coffee: {
-    allowTypes: ['cafe', 'bakery'],
-    denyTypes: ['bar', 'night_club', ...GLOBAL_DENY_TYPES],
-    positiveKeywords: ['coffee', 'cafe', 'espresso', 'latte'],
-    denyKeywords: [],
-    nearbyTypes: ['cafe', 'bakery'],
-    queryTerms: ['coffee shop near me', 'local cafe near me'],
-  },
-
-  dessert: {
-    allowTypes: ['bakery', 'cafe'],
-    denyTypes: [...GLOBAL_DENY_TYPES],
-    positiveKeywords: ['ice cream', 'gelato', 'dessert', 'bakery', 'pastry'],
-    denyKeywords: [],
-    nearbyTypes: ['bakery'],
-    queryTerms: ['dessert near me', 'ice cream near me'],
-  },
-
-  bar: {
-    allowTypes: ['bar'],
-    denyTypes: ['restaurant', ...GLOBAL_DENY_TYPES],
-    positiveKeywords: ['bar', 'pub', 'taproom', 'cocktail'],
-    denyKeywords: [],
-    nearbyTypes: ['bar'],
-    queryTerms: ['bars near me', 'cocktail bar near me'],
-  },
-
   outdoors: {
     allowTypes: [
       'park',
-      'tourist_attraction',
+      'national_park',
+      'nature_reserve',
+      'botanical_garden',
       'hiking_area',
       'trail',
-      'nature_reserve',
+      'campground',
       'beach',
+      'marina',
       'viewpoint',
-      'botanical_garden',
-    ],
-    denyTypes: [...GLOBAL_DENY_TYPES],
-    positiveKeywords: [
-      'park',
-      'trail',
-      'nature',
-      'preserve',
-      'garden',
-      'lake',
-      'beach',
-      'boardwalk',
-    ],
-    denyKeywords: [],
-    nearbyTypes: ['park', 'tourist_attraction'],
-    queryTerms: ['parks near me', 'nature trails near me'],
-  },
-
-  arts: {
-    allowTypes: ['museum', 'art_gallery', 'performing_arts_theater'],
-    denyTypes: [...GLOBAL_DENY_TYPES],
-    positiveKeywords: ['museum', 'gallery', 'theater', 'exhibit'],
-    denyKeywords: [],
-    nearbyTypes: ['museum', 'art_gallery'],
-    queryTerms: ['museums near me', 'art galleries near me'],
-  },
-
-  activity: {
-    allowTypes: [
-      'bowling_alley',
-      'amusement_center',
-      'arcade',
+      'natural_feature',
       'tourist_attraction',
+      'zoo',
+      'aquarium',
     ],
     denyTypes: [
-      'movie_theater', // Explicitly block cinemas
-      ...GLOBAL_DENY_TYPES,
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'shopping_mall',
+      'department_store',
+      'clothing_store',
+      'electronics_store',
+      'home_goods_store',
+      'furniture_store',
+      'hardware_store',
+      'pharmacy',
+      'gas_station',
+      'bank',
+      'atm',
+      'car_dealer',
+      'car_rental',
+      'store',
     ],
-    positiveKeywords: [
-      'arcade',
-      'bowling',
-      'mini golf',
-      'escape room',
-      'go kart',
-      'fun',
-    ],
-    denyKeywords: ['cinema', 'movie theater'],
-    nearbyTypes: ['amusement_center', 'bowling_alley'],
-    queryTerms: ['fun things to do near me', 'arcade near me'],
-  },
-
-  attraction: {
-    allowTypes: [
-      'tourist_attraction',
-      'amusement_park',
-      'zoo',
-      'aquarium',
-      'museum',
-      'landmark',
-    ],
-    denyTypes: [...GLOBAL_DENY_TYPES],
-    positiveKeywords: [
-      'attraction',
-      'theme park',
-      'zoo',
-      'aquarium',
-      'landmark',
-      'observation',
-    ],
-    denyKeywords: [],
-    nearbyTypes: ['tourist_attraction', 'amusement_park'],
-    queryTerms: ['top attractions near me', 'tourist attraction'],
+    positiveKeywords: ['park', 'trail', 'nature', 'garden', 'lake', 'river', 'beach', 'preserve', 'boardwalk', 'viewpoint'],
+    denyKeywords: ['walmart', 'target', 'costco', 'outlet', 'mall', 'pharmacy', ...GLOBAL_DENY_KEYWORDS],
   },
 
   shopping: {
-    allowTypes: ['shopping_mall', 'clothing_store', 'department_store'],
-    denyTypes: [...GLOBAL_DENY_TYPES],
-    positiveKeywords: ['mall', 'boutique', 'shopping'],
-    denyKeywords: [],
-    nearbyTypes: ['shopping_mall'],
-    queryTerms: ['shopping mall near me'],
+    allowTypes: [
+      'shopping_mall',
+      'department_store',
+      'clothing_store',
+      'shoe_store',
+      'electronics_store',
+      'home_goods_store',
+      'furniture_store',
+      'hardware_store',
+      'store',
+    ],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'park',
+      'campground',
+      'hiking_area',
+      'trail',
+      'natural_feature',
+      'nature_reserve',
+      'beach',
+    ],
+    positiveKeywords: ['mall', 'outlet', 'plaza', 'shopping', 'store', 'boutique'],
+    denyKeywords: ['park', 'trail', 'preserve', 'nature', 'beach', ...GLOBAL_DENY_KEYWORDS],
+  },
+
+  restaurant: {
+    allowTypes: ['restaurant', 'meal_takeaway', 'meal_delivery', 'food'],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'shopping_mall',
+      'department_store',
+      'store',
+      'park',
+      'campground',
+      'gas_station',
+    ],
+    positiveKeywords: ['restaurant', 'grill', 'kitchen', 'diner', 'eatery', 'bistro', 'steakhouse', 'sushi', 'pizza'],
+    denyKeywords: ['walmart', 'target', 'costco', 'mall', 'gas', 'station', ...GLOBAL_DENY_KEYWORDS],
+  },
+
+  coffee: {
+    allowTypes: ['cafe', 'coffee_shop', 'bakery'],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'night_club',
+      'bar',
+      'shopping_mall',
+      'department_store',
+      'store',
+      'gas_station',
+      'pharmacy',
+    ],
+    positiveKeywords: ['coffee', 'cafe', 'espresso', 'latte', 'roastery', 'tea'],
+    denyKeywords: ['walmart', 'target', 'outlet', 'pharmacy', 'gas', ...GLOBAL_DENY_KEYWORDS],
+  },
+
+  bar: {
+    allowTypes: ['bar', 'night_club'],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'shopping_mall',
+      'department_store',
+      'store',
+      'park',
+      'restaurant', // helps avoid generic restaurants getting labeled as "bar"
+    ],
+    positiveKeywords: ['bar', 'pub', 'taproom', 'cocktail', 'brewery', 'speakeasy'],
+    denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
+  },
+
+  dessert: {
+    allowTypes: ['bakery', 'dessert_shop', 'ice_cream_shop', 'cafe'],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'shopping_mall',
+      'department_store',
+      'store',
+      'hardware_store',
+      'gas_station',
+      'pharmacy',
+    ],
+    positiveKeywords: ['dessert', 'ice cream', 'gelato', 'bakery', 'pastry', 'donut', 'cake', 'cookies'],
+    denyKeywords: ['walmart', 'target', 'gas', 'station', ...GLOBAL_DENY_KEYWORDS],
+  },
+
+  activity: {
+    // IMPORTANT: movie_theater intentionally not allowed.
+    allowTypes: [
+      'bowling_alley',
+      'arcade',
+      'amusement_center',
+      'amusement_park',
+      'tourist_attraction',
+      'mini_golf_course',
+      'escape_room',
+      'water_park',
+    ],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'grocery_or_supermarket',
+      'shopping_mall',
+      'department_store',
+      'hardware_store',
+      'pharmacy',
+      'store',
+    ],
+    positiveKeywords: ['arcade', 'bowling', 'mini golf', 'escape room', 'go kart', 'fun', 'activity', 'laser tag'],
+    denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
+  },
+
+  arts: {
+    allowTypes: ['museum', 'art_gallery', 'performing_arts_theater', 'cultural_center'],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'shopping_mall',
+      'department_store',
+      'hardware_store',
+      'pharmacy',
+      'store',
+    ],
+    positiveKeywords: ['museum', 'gallery', 'exhibit', 'arts', 'cultural', 'theater', 'theatre'],
+    denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
+  },
+
+  attraction: {
+    allowTypes: ['tourist_attraction', 'amusement_park', 'zoo', 'aquarium', 'museum', 'landmark', 'point_of_interest'],
+    denyTypes: [
+      ...Array.from(GLOBAL_DENY_TYPES),
+      'shopping_mall',
+      'department_store',
+      'convenience_store',
+      'electronics_store',
+      'home_goods_store',
+      'hardware_store',
+      'pharmacy',
+      'gas_station',
+      'store',
+    ],
+    positiveKeywords: ['attraction', 'landmark', 'zoo', 'aquarium', 'museum', 'theme park', 'water park', 'observation', 'visitor center'],
+    denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
   },
 };
 
-const containsAny = (haystack: string, needles: string[]) =>
-  needles.some((needle) => haystack.includes(needle));
+const containsAny = (haystack: string, needles: string[]) => needles.some((needle) => haystack.includes(needle));
+const overlaps = (values: string[], candidates: string[]) => values.some((value) => candidates.includes(value));
 
-const overlaps = (values: string[], candidates: string[]) =>
-  values.some((value) => candidates.includes(value));
+const normalizeTypes = (types?: string[]) => (types || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean);
 
-export const evaluateCategoryCandidate = (
-  stopType: StopType,
-  place: CategoryEvalInput,
-): CategoryEvalResult => {
+export const evaluateCategoryCandidate = (stopType: StopType, place: CategoryEvalInput): CategoryEvalResult => {
   const policy = CATEGORY_POLICIES[stopType];
 
-  const normalizedTypes = (place.types || []).map((t) => t.toLowerCase());
-  const normalizedText = `${place.name || ''} ${place.address || ''}`.toLowerCase();
+  const types = normalizeTypes(place.types);
+  const text = `${place.name || ''} ${place.address || ''}`.toLowerCase();
 
-  const hasAllowType = overlaps(normalizedTypes, policy.allowTypes);
-  const hasDenyType =
-    overlaps(normalizedTypes, policy.denyTypes) ||
-    overlaps(normalizedTypes, GLOBAL_DENY_TYPES);
+  // 1) Global hard rejects
+  const globalDenyType = types.some((t) => GLOBAL_DENY_TYPES.has(t));
+  const globalDenyKeyword = containsAny(text, GLOBAL_DENY_KEYWORDS);
 
-  const hasPositiveKeyword = containsAny(normalizedText, policy.positiveKeywords);
-  const hasDenyKeyword =
-    containsAny(normalizedText, policy.denyKeywords) ||
-    containsAny(normalizedText, GLOBAL_DENY_KEYWORDS);
+  // 2) Per-category type + keyword signals
+  const hasAllowType = overlaps(types, policy.allowTypes);
+  const hasDenyType = overlaps(types, policy.denyTypes);
+
+  const hasPositiveKeyword = containsAny(text, policy.positiveKeywords);
+  const hasDenyKeyword = containsAny(text, policy.denyKeywords);
 
   const reasons: string[] = [];
 
+  if (globalDenyType) reasons.push('global_deny_type_match');
+  if (globalDenyKeyword) reasons.push('global_deny_keyword_match');
+
+  if (hasDenyType) reasons.push('deny_type_match');
+  if (hasDenyKeyword) reasons.push('deny_keyword_match');
+
+  // If we have types, demand at least one allow-type (keywords are fallback)
+  const hasAnyTypes = types.length > 0;
+  if (hasAnyTypes && !hasAllowType) reasons.push('missing_allow_type');
+
+  // Scoring (simple + robust)
   let score = 0;
-  if (hasAllowType) score += 3;
-  if (hasPositiveKeyword) score += 2;
-  if (hasDenyType) score -= 5;
+  if (hasAllowType) score += 4;
+  if (!hasAnyTypes && hasPositiveKeyword) score += 2; // keyword fallback only when types are missing
   if (hasDenyKeyword) score -= 6;
+  if (hasDenyType) score -= 3;
+  if (globalDenyType || globalDenyKeyword) score -= 10;
 
-  if (!hasAllowType && !hasPositiveKeyword) reasons.push('no_positive_signal');
-  if (hasDenyType) reasons.push('deny_type');
-  if (hasDenyKeyword) reasons.push('deny_keyword');
+  const hardRejected =
+    globalDenyType ||
+    globalDenyKeyword ||
+    hasDenyType ||
+    hasDenyKeyword ||
+    (hasAnyTypes && !hasAllowType);
 
-  const accepted = score >= 2 && !hasDenyType && !hasDenyKeyword;
+  // If we had no types, allow keyword-only acceptance with a higher threshold.
+  const threshold = hasAnyTypes ? 2 : 3;
 
-  return {
-    accepted,
-    score,
-    reasons,
-  };
+  const accepted = !hardRejected && score >= threshold;
+
+  if (!accepted) reasons.push('rejected');
+
+  return { accepted, score, reasons };
 };

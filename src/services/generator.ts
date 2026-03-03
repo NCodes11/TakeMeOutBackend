@@ -1,4 +1,4 @@
-import { PlaceCandidate, Stop, StopType, WizardInput } from '@/types/models';
+import { PlaceCandidate, Stop, StopType, WizardInput, GroupType, BudgetType } from '@/types/models';
 import { normalizeSelectedStopTypes } from '@/constants/stopTypes';
 import { RoutingProvider } from '@/providers/routingProvider';
 import {
@@ -22,31 +22,9 @@ const parseMinutes = (time: string) => {
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 /**
- * Normalizes a place name for dedupe:
- * - lowercases
- * - strips punctuation
- * - collapses whitespace
- * - removes common location suffixes (e.g. " - Downtown", "#12")
+ * Caps stops so short time windows never create impossible itineraries.
  */
-const normalizePlaceName = (name: string) => {
-  return (name || '')
-    .toLowerCase()
-    .replace(/[#@].*$/g, '') // drop "#12", "@something" at end
-    .replace(/\s+-\s+.*$/g, '') // drop " - Downtown", " - Orlando"
-    .replace(/\(.*?\)/g, '') // drop "(Mall)", "(Inside ...)"
-    .replace(/[^a-z0-9\s]/g, ' ') // punctuation -> space
-    .replace(/\s+/g, ' ')
-    .trim();
-};
-
-/**
- * Brand key used to prevent "Pizza Hut" twice at different locations.
- * We intentionally dedupe by normalized brand-like name (not by coordinates).
- */
-const brandKeyForCandidate = (candidate: { name: string }) => normalizePlaceName(candidate.name);
-
 const capStopsForWindow = (windowMinutes: number, requested: number) => {
-  // Prevent unrealistic stop counts for short day windows.
   let maxStops = 8;
   if (windowMinutes <= 60) maxStops = 2;
   else if (windowMinutes <= 90) maxStops = 3;
@@ -90,7 +68,7 @@ const toPlaceCandidateFromStop = (stop: Stop): PlaceCandidate => {
 };
 
 /**
- * If only restaurants were selected, add a few compatible types so the plan stays usable.
+ * If the user only selects restaurants, broaden slightly so the day isn't just 3 meals.
  */
 const enrichStopTypesIfOnlyRestaurants = (types: StopType[]) => {
   const unique = Array.from(new Set(types));
@@ -100,12 +78,73 @@ const enrichStopTypesIfOnlyRestaurants = (types: StopType[]) => {
   return unique;
 };
 
+const uniqueStopTypes = (types: StopType[]) => Array.from(new Set(types));
+
+export const buildFeelingLuckyStopTypes = (input: WizardInput): StopType[] => {
+  const maxTravel = Math.max(5, Math.round(input.preferences.maxTravelMinutes || 30));
+
+  let mix: StopType[];
+  if (input.groupType === 'Family') {
+    mix = ['activity', 'outdoors', 'attraction', 'dessert', 'restaurant', 'coffee'];
+  } else if (input.groupType === 'Friends') {
+    mix = ['activity', 'restaurant', 'outdoors', 'bar', 'coffee', 'dessert'];
+  } else {
+    mix = ['coffee', 'activity', 'restaurant', 'arts', 'dessert', 'outdoors'];
+  }
+
+  if (input.budget === '$') {
+    mix = mix.filter((type) => type !== 'bar' && type !== 'attraction');
+  } else if (input.budget === '$$$') {
+    mix = uniqueStopTypes([...mix, 'arts', 'attraction']);
+  }
+
+  if (maxTravel <= 20) {
+    mix = mix.filter((type) => type !== 'attraction');
+  }
+
+  if (input.returnToStart) {
+    mix = uniqueStopTypes(['coffee', ...mix]);
+  }
+
+  if (input.groupType === 'Family') {
+    mix = mix.filter((type) => type !== 'bar');
+  }
+
+  return uniqueStopTypes(mix);
+};
+
 /**
- * Keeps restaurant stops to a sensible number:
- * - multiple selected categories -> max 1 restaurant
- * - only restaurant selected -> max 2 restaurants
+ * Removes stop types that don't make sense for the user's group type.
  */
-const enforceRestaurantCap = (tokens: StopType[], selectedTypes: StopType[]) => {
+const applyGroupTypeStopTypeConstraints = (groupType: GroupType, types: StopType[]) => {
+  const unique = Array.from(new Set(types));
+
+  if (groupType === 'Family') {
+    return unique.filter((t) => t !== 'bar');
+  }
+
+  return unique;
+};
+
+const resolveSelectedStopTypes = (input: WizardInput) => {
+  const selected = normalizeSelectedStopTypes(input.preferences.interests);
+  if (selected.length > 0) {
+    return applyGroupTypeStopTypeConstraints(input.groupType, enrichStopTypesIfOnlyRestaurants(selected));
+  }
+
+  if (input.feelingLucky) {
+    return applyGroupTypeStopTypeConstraints(input.groupType, buildFeelingLuckyStopTypes(input));
+  }
+
+  return [] as StopType[];
+};
+
+/**
+ * Limits restaurant frequency:
+ * - If multiple categories are selected and restaurant is one of them -> max 1 restaurant
+ * - If only restaurant is selected -> max 2 restaurants
+ */
+const enforceRestaurantCap = (tokens: StopType[], selectedTypes: StopType[], groupType: GroupType) => {
   const uniqueSelected = new Set(selectedTypes);
   const hasMultipleCategories = uniqueSelected.size > 1;
   const maxRestaurants = hasMultipleCategories ? 1 : 2;
@@ -113,7 +152,18 @@ const enforceRestaurantCap = (tokens: StopType[], selectedTypes: StopType[]) => 
   const restaurantCount = tokens.filter((t) => t === 'restaurant').length;
   if (restaurantCount <= maxRestaurants) return tokens;
 
-  const replacementOrder: StopType[] = ['activity', 'attraction', 'outdoors', 'arts', 'coffee', 'dessert', 'shopping', 'bar'];
+  const baseReplacementOrder: StopType[] = [
+    'activity',
+    'attraction',
+    'outdoors',
+    'arts',
+    'coffee',
+    'dessert',
+    'shopping',
+    'bar',
+  ];
+
+  const replacementOrder = groupType === 'Family' ? baseReplacementOrder.filter((t) => t !== 'bar') : baseReplacementOrder;
 
   const pickReplacement = (): StopType => {
     for (const t of replacementOrder) {
@@ -136,15 +186,162 @@ const enforceRestaurantCap = (tokens: StopType[], selectedTypes: StopType[]) => 
   return out;
 };
 
+/**
+ * Produces a stable "brand key" so chain duplicates don't appear multiple times.
+ */
+const brandKeyFromName = (name: string) => {
+  const raw = (name || '').toLowerCase().trim();
+  if (!raw) return '';
+
+  const cut = raw
+    .split(' - ')[0]
+    .split(' – ')[0]
+    .split(' — ')[0]
+    .split(' | ')[0]
+    .split(' @ ')[0]
+    .split(' at ')[0];
+
+  const cleaned = cut
+    .replace(/[#.,/\\()]/g, ' ')
+    .replace(/\b(store|location|restaurant|cafe|coffee|bar|grill|kitchen|shop|market)\b/g, ' ')
+    .replace(/\b\d+\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned;
+};
+
+const isLikelyDuplicateBrand = (nameA: string, nameB: string) => {
+  const a = brandKeyFromName(nameA);
+  const b = brandKeyFromName(nameB);
+  if (!a || !b) return false;
+  return a === b;
+};
+
+const buildDedupeKeys = (candidate: PlaceCandidate) => {
+  const idKey = candidate.id ? `id:${candidate.id}` : '';
+  const pidKey = candidate.providerId ? `pid:${candidate.providerId}` : '';
+  const coordKey =
+    Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng)
+      ? `xy:${candidate.lat.toFixed(5)}:${candidate.lng.toFixed(5)}`
+      : '';
+  const brandKey = candidate.name ? `brand:${brandKeyFromName(candidate.name)}` : '';
+  return { idKey, pidKey, coordKey, brandKey };
+};
+
+/**
+ * Sorts candidates by quality signals (rating, review count, then name).
+ */
+const preferQualitySort = (a: PlaceCandidate, b: PlaceCandidate) => {
+  const ar = typeof a.rating === 'number' ? a.rating : 0;
+  const br = typeof b.rating === 'number' ? b.rating : 0;
+  if (br !== ar) return br - ar;
+
+  const ac = typeof a.reviewCount === 'number' ? a.reviewCount : 0;
+  const bc = typeof b.reviewCount === 'number' ? b.reviewCount : 0;
+  if (bc !== ac) return bc - ac;
+
+  return (a.name || '').localeCompare(b.name || '');
+};
+
+const textBlob = (c: PlaceCandidate) =>
+  `${c.name || ''} ${(c.category || '')} ${c.address || ''} ${(c.tags || []).join(' ')}`.toLowerCase();
+
+/**
+ * Maps budget choice to an expected price level range.
+ * priceLevel is typically 0–4 depending on provider.
+ */
+const budgetBand = (budget: BudgetType) => {
+  if (budget === '$') return { min: 0, max: 1, idealMin: 0, idealMax: 1 };
+  if (budget === '$$') return { min: 1, max: 2, idealMin: 1, idealMax: 2 };
+  return { min: 2, max: 4, idealMin: 2, idealMax: 3 };
+};
+
+/**
+ * Returns a score based on how well a candidate matches the user's budget.
+ * Missing priceLevel is treated as neutral so we don't throw away good candidates.
+ */
+const scoreBudgetFit = (input: WizardInput, c: PlaceCandidate) => {
+  const p = typeof c.priceLevel === 'number' ? c.priceLevel : undefined;
+  if (p == null) return 0;
+
+  const band = budgetBand(input.budget);
+
+  if (p >= band.idealMin && p <= band.idealMax) return 6;
+  if (p >= band.min && p <= band.max) return 2;
+  return -4;
+};
+
+/**
+ * Returns a score based on group type.
+ * Family implies kid-friendly behavior.
+ */
+const scoreGroupFit = (input: WizardInput, token: StopType, c: PlaceCandidate) => {
+  const blob = textBlob(c);
+  const hasAny = (words: string[]) => words.some((w) => blob.includes(w));
+
+  const nightlife = ['nightclub', 'club', 'bar', 'cocktail', 'lounge', 'pub', 'brewery', 'speakeasy'];
+  const familyFriendly = ['park', 'playground', 'zoo', 'aquarium', 'museum', 'ice cream', 'gelato', 'family', 'kids'];
+  const romantic = ['romantic', 'cozy', 'wine', 'view', 'rooftop', 'date', 'bistro', 'tapas', 'dessert'];
+
+  if (input.groupType === 'Family') {
+    let score = 0;
+
+    if (token === 'bar' || hasAny(nightlife)) score -= 10;
+    if (token === 'outdoors' || token === 'activity' || token === 'attraction') score += 2;
+    if (hasAny(familyFriendly)) score += 6;
+
+    return score;
+  }
+
+  if (input.groupType === 'Date') {
+    let score = 0;
+
+    if (token === 'restaurant' || token === 'coffee' || token === 'dessert' || token === 'arts') score += 3;
+    if (hasAny(romantic)) score += 5;
+    if (hasAny(['playground', 'kids'])) score -= 2;
+
+    return score;
+  }
+
+  // Friends
+  {
+    let score = 0;
+
+    if (token === 'activity' || token === 'bar') score += 3;
+    if (hasAny(['live', 'music', 'arcade', 'game', 'sports', 'brewery', 'pub', 'bar'])) score += 4;
+    if (hasAny(['playground'])) score -= 1;
+
+    return score;
+  }
+};
+
+/**
+ * Combines preference signals into a single score.
+ */
+const preferenceScore = (input: WizardInput, token: StopType, c: PlaceCandidate) => {
+  return scoreBudgetFit(input, c) + scoreGroupFit(input, token, c);
+};
+
+/**
+ * Sorts candidates so user preferences are applied first, then quality breaks ties.
+ */
+const preferInputAwareSort = (input: WizardInput, token: StopType) => {
+  return (a: PlaceCandidate, b: PlaceCandidate) => {
+    const sa = preferenceScore(input, token, a);
+    const sb = preferenceScore(input, token, b);
+    if (sb !== sa) return sb - sa;
+    return preferQualitySort(a, b);
+  };
+};
+
 export const generateStops = async (
   planId: string,
   input: WizardInput,
   candidates: PlaceCandidate[],
   routing: RoutingProvider,
 ): Promise<Stop[]> => {
-  // 1) Normalize request + validate candidate coordinates.
-  const normalized = normalizeSelectedStopTypes(input.preferences.interests);
-  const selectedStopTypes = enrichStopTypesIfOnlyRestaurants(normalized);
+  const selectedStopTypes = resolveSelectedStopTypes(input);
 
   const validCandidates = candidates
     .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && (p.lat !== 0 || p.lng !== 0))
@@ -158,11 +355,9 @@ export const generateStops = async (
   const rawRequested = Math.max(1, Math.min(8, Math.floor(input.stopCount || 3)));
   const requestedCount = capStopsForWindow(totalMinutes, rawRequested);
 
-  // 2) Build a target sequence of stop-type tokens, then smooth adjacency/caps.
   const allocation = buildStopAllocation(selectedStopTypes, requestedCount);
-
   let orderedTokens = enforceCapsAndAdjacency(orderAllocation(allocation, input.startTime, input.endTime));
-  orderedTokens = enforceRestaurantCap(orderedTokens, selectedStopTypes);
+  orderedTokens = enforceRestaurantCap(orderedTokens, selectedStopTypes, input.groupType);
 
   const byType = new Map<StopType, PlaceCandidate[]>();
   for (const candidate of validCandidates) {
@@ -172,30 +367,56 @@ export const generateStops = async (
     byType.set(t, list);
   }
 
+  for (const [t, list] of byType.entries()) {
+    byType.set(t, [...list].sort(preferInputAwareSort(input, t)));
+  }
+
   const selected: PlaceCandidate[] = [];
   const selectedTokens: StopType[] = [];
-  const usedPlaceIds = new Set<string>();
-  const usedProviderIds = new Set<string>();
+
+  const usedIdKeys = new Set<string>();
+  const usedProviderKeys = new Set<string>();
+  const usedCoordKeys = new Set<string>();
   const usedBrandKeys = new Set<string>();
 
-  // 3) Pick one place per token, ensuring no duplicate providerId, id, or brand-key.
+  const isBlocked = (candidate: PlaceCandidate) => {
+    const keys = buildDedupeKeys(candidate);
+    if (keys.idKey && usedIdKeys.has(keys.idKey)) return true;
+    if (keys.pidKey && usedProviderKeys.has(keys.pidKey)) return true;
+    if (keys.coordKey && usedCoordKeys.has(keys.coordKey)) return true;
+    if (keys.brandKey && usedBrandKeys.has(keys.brandKey)) return true;
+    if (selected.some((s) => isLikelyDuplicateBrand(s.name, candidate.name))) return true;
+    return false;
+  };
+
+  const markUsed = (candidate: PlaceCandidate) => {
+    const keys = buildDedupeKeys(candidate);
+    if (keys.idKey) usedIdKeys.add(keys.idKey);
+    if (keys.pidKey) usedProviderKeys.add(keys.pidKey);
+    if (keys.coordKey) usedCoordKeys.add(keys.coordKey);
+    if (keys.brandKey) usedBrandKeys.add(keys.brandKey);
+  };
+
   orderedTokens.forEach((token, tokenIndex) => {
-    const tokenCandidates = (byType.get(token) || []).filter((candidate) => {
-      if (usedPlaceIds.has(candidate.id)) return false;
-      if (candidate.providerId && usedProviderIds.has(candidate.providerId)) return false;
+    const typedPool = (byType.get(token) || []).filter((c) => !isBlocked(c));
 
-      const bKey = brandKeyForCandidate(candidate);
-      if (bKey && usedBrandKeys.has(bKey)) return false;
-
-      return true;
+    const acceptedPool = typedPool.filter((c) => {
+      const check = evaluateCategoryCandidate(token, {
+        name: c.name,
+        address: c.address,
+        types: c.tags,
+      });
+      return check.accepted;
     });
+
+    const candidatePool = acceptedPool.length ? acceptedPool : typedPool;
 
     const picked =
       selectPlaceForToken({
         token,
         tokenIndex,
         seed: planId,
-        candidates: tokenCandidates,
+        candidates: candidatePool,
         selected,
         input,
       }) ||
@@ -203,32 +424,18 @@ export const generateStops = async (
         token,
         tokenIndex,
         seed: `${planId}-fallback`,
-        candidates: validCandidates.filter((candidate) => {
-          if (usedPlaceIds.has(candidate.id)) return false;
-          if (candidate.providerId && usedProviderIds.has(candidate.providerId)) return false;
-
-          const bKey = brandKeyForCandidate(candidate);
-          if (bKey && usedBrandKeys.has(bKey)) return false;
-
-          return selectedStopTypes.includes(candidate.stopType);
-        }),
+        candidates: (byType.get(token) || []).filter((c) => !isBlocked(c)).sort(preferInputAwareSort(input, token)),
         selected,
         input,
       });
 
     if (picked) {
-      usedPlaceIds.add(picked.id);
-      if (picked.providerId) usedProviderIds.add(picked.providerId);
-
-      const bKey = brandKeyForCandidate(picked);
-      if (bKey) usedBrandKeys.add(bKey);
-
+      markUsed(picked);
       selected.push({ ...picked, stopType: ensureStopType(picked.stopType) });
       selectedTokens.push(token);
     }
   });
 
-  // 4) Policy validation pass: replace bad picks when possible.
   for (let index = 0; index < selected.length; index += 1) {
     const tokenType = ensureStopType(selectedTokens[index] ?? selected[index]?.stopType);
     const current = selected[index];
@@ -240,24 +447,28 @@ export const generateStops = async (
     });
     if (validation.accepted) continue;
 
-    const currentBrand = brandKeyForCandidate(current);
+    const currentKeys = buildDedupeKeys(current);
 
-    const replacementPool = validCandidates.filter((candidate) => {
-      if (candidate.id === current.id) return false;
-      if (usedPlaceIds.has(candidate.id)) return false;
-      if (candidate.providerId && usedProviderIds.has(candidate.providerId)) return false;
+    const replacementPool = (byType.get(tokenType) || [])
+      .filter((c) => {
+        if (c.id === current.id) return false;
+        if (current.providerId && c.providerId && c.providerId === current.providerId) return false;
+        if (isLikelyDuplicateBrand(c.name, current.name)) return false;
 
-      const bKey = brandKeyForCandidate(candidate);
-      if (bKey && usedBrandKeys.has(bKey) && bKey !== currentBrand) return false;
+        const k = buildDedupeKeys(c);
+        if (k.idKey && usedIdKeys.has(k.idKey) && k.idKey !== currentKeys.idKey) return false;
+        if (k.pidKey && usedProviderKeys.has(k.pidKey) && k.pidKey !== currentKeys.pidKey) return false;
+        if (k.coordKey && usedCoordKeys.has(k.coordKey) && k.coordKey !== currentKeys.coordKey) return false;
+        if (k.brandKey && usedBrandKeys.has(k.brandKey) && k.brandKey !== currentKeys.brandKey) return false;
 
-      const check = evaluateCategoryCandidate(tokenType, {
-        name: candidate.name,
-        address: candidate.address,
-        types: candidate.tags,
-      });
-
-      return check.accepted;
-    });
+        const check = evaluateCategoryCandidate(tokenType, {
+          name: c.name,
+          address: c.address,
+          types: c.tags,
+        });
+        return check.accepted;
+      })
+      .sort(preferInputAwareSort(input, tokenType));
 
     const replacement = selectPlaceForToken({
       token: tokenType,
@@ -269,18 +480,8 @@ export const generateStops = async (
     });
 
     if (replacement) {
-      usedPlaceIds.delete(current.id);
-      if (current.providerId) usedProviderIds.delete(current.providerId);
-
-      if (currentBrand) usedBrandKeys.delete(currentBrand);
-
-      usedPlaceIds.add(replacement.id);
-      if (replacement.providerId) usedProviderIds.add(replacement.providerId);
-
-      const nextBrand = brandKeyForCandidate(replacement);
-      if (nextBrand) usedBrandKeys.add(nextBrand);
-
       selected[index] = { ...replacement, stopType: ensureStopType(replacement.stopType) };
+      markUsed(replacement);
     }
   }
 
@@ -289,7 +490,6 @@ export const generateStops = async (
   const coords = selected.map((s) => [s.lat, s.lng] as [number, number]);
   const routeLegs = await routing.route(coords, input.transport);
 
-  // 5) Assign clock times and enrich each stop with travel metadata.
   const scheduled: ScheduledStop[] = scheduleItinerary(selected, input, input.startTime, input.endTime);
 
   return scheduled.map((s, index) => {
@@ -329,8 +529,7 @@ export const generateStops = async (
 };
 
 /**
- * Rerolls a single stop while keeping the SAME stopType.
- * Prevents duplicates by providerId and brand-key (ex: "Pizza Hut" twice).
+ * Rerolls a single stop while keeping the SAME stopType and avoiding duplicates.
  */
 export const rerollStop = async (params: {
   planId: string;
@@ -357,38 +556,44 @@ export const rerollStop = async (params: {
     return found || toPlaceCandidateFromStop(s);
   });
 
-  const usedIds = new Set<string>();
-  const usedProviderIds = new Set<string>();
+  const usedIdKeys = new Set<string>();
+  const usedProviderKeys = new Set<string>();
+  const usedCoordKeys = new Set<string>();
   const usedBrandKeys = new Set<string>();
 
   orderedPlaces.forEach((p, i) => {
     if (i === stopIndex) return;
-    usedIds.add(p.id);
-    if (p.providerId) usedProviderIds.add(p.providerId);
-
-    const bKey = brandKeyForCandidate(p);
-    if (bKey) usedBrandKeys.add(bKey);
+    const k = buildDedupeKeys(p);
+    if (k.idKey) usedIdKeys.add(k.idKey);
+    if (k.pidKey) usedProviderKeys.add(k.pidKey);
+    if (k.coordKey) usedCoordKeys.add(k.coordKey);
+    if (k.brandKey) usedBrandKeys.add(k.brandKey);
   });
 
   const currentPlace = orderedPlaces[stopIndex];
-  const currentId = currentPlace?.id;
-  const currentProviderId = currentPlace?.providerId;
-  const currentBrandKey = currentPlace?.name ? brandKeyForCandidate(currentPlace) : '';
+  const currentKeys = buildDedupeKeys(currentPlace);
 
-  const pool = validCandidates.filter((c) => {
-    if (ensureStopType(c.stopType) !== tokenType) return false;
-    if (usedIds.has(c.id)) return false;
-    if (c.providerId && usedProviderIds.has(c.providerId)) return false;
+  const isBlocked = (c: PlaceCandidate) => {
+    const k = buildDedupeKeys(c);
 
-    const bKey = brandKeyForCandidate(c);
-    if (bKey && usedBrandKeys.has(bKey)) return false;
+    if (k.idKey && k.idKey === currentKeys.idKey) return true;
+    if (k.pidKey && k.pidKey === currentKeys.pidKey) return true;
+    if (k.coordKey && k.coordKey === currentKeys.coordKey) return true;
 
-    if (currentId && c.id === currentId) return false;
-    if (currentProviderId && c.providerId && c.providerId === currentProviderId) return false;
-    if (currentBrandKey && bKey && bKey === currentBrandKey) return false;
+    if (k.idKey && usedIdKeys.has(k.idKey)) return true;
+    if (k.pidKey && usedProviderKeys.has(k.pidKey)) return true;
+    if (k.coordKey && usedCoordKeys.has(k.coordKey)) return true;
+    if (k.brandKey && usedBrandKeys.has(k.brandKey)) return true;
 
-    return true;
-  });
+    if (orderedPlaces.some((p, i) => i !== stopIndex && isLikelyDuplicateBrand(p.name, c.name))) return true;
+
+    return false;
+  };
+
+  const pool = validCandidates
+    .filter((c) => ensureStopType(c.stopType) === tokenType)
+    .filter((c) => !isBlocked(c))
+    .sort(preferInputAwareSort(input, tokenType));
 
   if (pool.length === 0) return currentStops;
 

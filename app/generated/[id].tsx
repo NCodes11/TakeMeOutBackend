@@ -13,7 +13,8 @@ import { palette, spacing } from '@/theme/appTheme';
 import { buildAppleMapsPinUrl, hasValidCoords } from '@/utils/maps';
 import { WizardInput } from '@/types/models';
 
-const isViewMode = (value: string): value is 'timeline' | 'list' => value === 'timeline' || value === 'list';
+const isViewMode = (value: string): value is 'timeline' | 'list' =>
+  value === 'timeline' || value === 'list';
 
 export default function GeneratedPlanScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -21,7 +22,12 @@ export default function GeneratedPlanScreen() {
   const plans = usePlanStore((s) => s.plans);
   const stops = usePlanStore((s) => s.stopsByPlan[id] || []);
   const warning = usePlanStore((s) => s.warning);
+  const error = usePlanStore((s) => s.error);
+
   const rerollStop = usePlanStore((s) => s.rerollStop);
+
+  // Subscribe to the state that actually changes so the UI re-renders during reroll.
+  const rerollingByPlan = usePlanStore((s) => s.rerollingByPlan);
 
   const [view, setView] = useState<'timeline' | 'list'>('timeline');
   const [feedbackVisible, setFeedbackVisible] = useState(false);
@@ -32,7 +38,6 @@ export default function GeneratedPlanScreen() {
   const derivedInput: WizardInput | null = useMemo(() => {
     if (!plan) return null;
 
-    // Rebuild a wizard-like payload so reroll uses the same constraints as the saved plan.
     let preferences: Record<string, unknown> = {};
     try {
       preferences = plan.preferencesJSON ? JSON.parse(plan.preferencesJSON) : {};
@@ -48,32 +53,55 @@ export default function GeneratedPlanScreen() {
       groupType: plan.groupType,
       transport: plan.transport,
       budget: plan.budget,
+      feelingLucky: Boolean(preferences?.feelingLucky),
       returnToStart: plan.returnToStart,
 
       startLat: plan.startLat,
       startLng: plan.startLng,
 
-      stopCount: typeof preferences?.stopCount === 'number' ? preferences.stopCount : orderedStops.length,
+      stopCount:
+        typeof preferences?.stopCount === 'number'
+          ? preferences.stopCount
+          : orderedStops.length,
 
       adults: typeof preferences?.adults === 'number' ? preferences.adults : 2,
       kids: typeof preferences?.kids === 'number' ? preferences.kids : 0,
       kidAges: Array.isArray(preferences?.kidAges) ? preferences.kidAges : [],
 
-      startLocationMode: typeof preferences?.startLocationMode === 'string' ? preferences.startLocationMode : 'my-location',
-      startAddress: typeof preferences?.startAddress === 'string' ? preferences.startAddress : '',
+      startLocationMode:
+        typeof preferences?.startLocationMode === 'string'
+          ? preferences.startLocationMode
+          : 'my-location',
+      startAddress:
+        typeof preferences?.startAddress === 'string'
+          ? preferences.startAddress
+          : '',
 
       preferences: {
         interests: Array.isArray(preferences?.interests) ? preferences.interests : [],
         avoid: Array.isArray(preferences?.avoid) ? preferences.avoid : [],
         mustInclude: typeof preferences?.mustInclude === 'string' ? preferences.mustInclude : '',
-        maxTravelMinutes: typeof preferences?.maxTravelMinutes === 'number' ? preferences.maxTravelMinutes : undefined,
-        kidFriendly: Boolean(preferences?.kidFriendly),
+        maxTravelMinutes:
+          typeof preferences?.maxTravelMinutes === 'number'
+            ? preferences.maxTravelMinutes
+            : undefined,
         accessibleFriendly: Boolean(preferences?.accessibleFriendly),
       },
     } as WizardInput;
   }, [plan, orderedStops.length]);
 
   if (!plan) return <Text>Plan not found</Text>;
+
+  const handleReroll = (stopOrder: number, rerolling: boolean) => {
+    if (rerolling) return;
+    if (!derivedInput) return;
+
+    void rerollStop(id, derivedInput, stopOrder).catch((e) => {
+      const message =
+        e instanceof Error ? e.message : 'Unable to reroll. Please try again.';
+      Alert.alert('Reroll failed', message);
+    });
+  };
 
   return (
     <AppScreen title={plan.title} subtitle={`${plan.city} · ${plan.date}`}>
@@ -101,6 +129,14 @@ export default function GeneratedPlanScreen() {
         </View>
       ) : null}
 
+      {error ? (
+        <View style={styles.errorState}>
+          <Text variant="bodySmall" style={styles.errorText}>
+            {error}
+          </Text>
+        </View>
+      ) : null}
+
       {warning ? (
         <View style={styles.warningState}>
           <Text variant="bodySmall" style={styles.warningText}>
@@ -110,59 +146,66 @@ export default function GeneratedPlanScreen() {
       ) : null}
 
       {view === 'timeline'
-        // Timeline uses richer stop cards; list mode is a compact management view.
-        ? orderedStops.map((s) => (
-            <StopCard
-              key={s.id}
-              stop={s}
-              onReroll={() => {
-                if (!derivedInput) return;
-                rerollStop(id, derivedInput, s.order);
-              }}
-              onOpenMap={async () => {
-                if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
-                  Alert.alert(
-                    'Missing location data',
-                    'This stop is missing coordinates. Regenerate your plan to refresh place details.',
-                  );
-                  return;
-                }
-                const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
-                await Linking.openURL(url);
-              }}
-            />
-          ))
-        : orderedStops.map((s, index) => (
-            <AppCard key={s.id}>
-              <Card.Title title={`${index + 1}. ${s.name}`} subtitle={`${s.category} · ${s.address}`} />
-              <Card.Actions>
-                <SecondaryButton
-                  onPress={async () => {
-                    if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
-                      Alert.alert(
-                        'Missing location data',
-                        'This stop is missing coordinates. Regenerate your plan to refresh place details.',
-                      );
-                      return;
-                    }
-                    const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
-                    await Linking.openURL(url);
-                  }}
-                >
-                  Open in Maps
-                </SecondaryButton>
+        ? orderedStops.map((s) => {
+            const rerolling = Boolean(rerollingByPlan[id]?.[s.order]);
 
-                <SecondaryButton
-                  onPress={() => {
-                    if (!derivedInput) return;
-                    rerollStop(id, derivedInput, s.order);
-                  }}
-                >
-                  Reroll
-                </SecondaryButton>
-              </Card.Actions>
-            </AppCard>
-          ))}
+            return (
+              <StopCard
+                key={s.id}
+                stop={s}
+                rerolling={rerolling}
+                onReroll={() => handleReroll(s.order, rerolling)}
+                onOpenMap={async () => {
+                  if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
+                    Alert.alert(
+                      'Missing location data',
+                      'This stop is missing coordinates. Regenerate your plan to refresh place details.',
+                    );
+                    return;
+                  }
+                  const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
+                  await Linking.openURL(url);
+                }}
+              />
+            );
+          })
+        : orderedStops.map((s, index) => {
+            const rerolling = Boolean(rerollingByPlan[id]?.[s.order]);
+
+            return (
+              <AppCard key={s.id}>
+                <Card.Title
+                  title={`${index + 1}. ${s.name}`}
+                  subtitle={`${s.category} · ${s.address}`}
+                />
+                <Card.Actions>
+                  <SecondaryButton
+                    onPress={async () => {
+                      if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
+                        Alert.alert(
+                          'Missing location data',
+                          'This stop is missing coordinates. Regenerate your plan to refresh place details.',
+                        );
+                        return;
+                      }
+                      const url = buildAppleMapsPinUrl({ lat: s.lat, lng: s.lng }, s.name);
+                      await Linking.openURL(url);
+                    }}
+                  >
+                    Open in Maps
+                  </SecondaryButton>
+
+                  <SecondaryButton
+                    disabled={rerolling}
+                    loading={rerolling}
+                    onPress={() => handleReroll(s.order, rerolling)}
+                  >
+                    {rerolling ? 'Finding…' : 'Reroll'}
+                  </SecondaryButton>
+                </Card.Actions>
+              </AppCard>
+            );
+          })}
 
       <View style={styles.actions}>
         <SecondaryButton onPress={() => router.push(`/plan/${id}`)}>Plan detail</SecondaryButton>
@@ -234,5 +277,15 @@ const styles = StyleSheet.create({
   },
   warningText: {
     color: '#92400e',
+  },
+  errorState: {
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    padding: spacing.sm,
+  },
+  errorText: {
+    color: '#991b1b',
   },
 });

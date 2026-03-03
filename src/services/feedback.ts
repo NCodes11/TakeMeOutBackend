@@ -5,6 +5,10 @@ import { saveFeatureRequest, saveTripFeedback } from '@/db/sqlite';
 import { FeatureRequest, FeatureRequestCategory, Plan, Stop, TripFeedback } from '@/types/models';
 
 const FEEDBACK_BASE_URL = process.env.EXPO_PUBLIC_FEEDBACK_API_BASE_URL?.trim();
+const FEEDBACK_API_KEY = process.env.EXPO_PUBLIC_FEEDBACK_API_KEY?.trim();
+
+const resolveDeviceType = (): FeatureRequest['deviceType'] =>
+  Platform.OS === 'android' ? 'android' : Platform.OS === 'web' ? 'web' : 'ios';
 
 const toCityState = (value: string): { city?: string; state?: string } => {
   const [cityRaw, stateRaw] = value.split(',').map((part) => part?.trim()).filter(Boolean);
@@ -26,9 +30,12 @@ const postToBackend = async (path: string, payload: Record<string, unknown>) => 
   // Optional remote sync; local persistence is the source of truth for beta collection.
   if (!FEEDBACK_BASE_URL) return;
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (FEEDBACK_API_KEY) headers['X-Feedback-Key'] = FEEDBACK_API_KEY;
+
     await fetch(`${FEEDBACK_BASE_URL.replace(/\/+$/, '')}/${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     });
   } catch {
@@ -68,6 +75,9 @@ export const submitTripFeedback = async ({
     stopCount: stops.length,
     priceTier: plan.budget,
     distancePreference: parseDistancePreference(plan.preferencesJSON),
+    appVersion: Constants.expoConfig?.version || 'unknown',
+    deviceType: resolveDeviceType(),
+    platform: resolveDeviceType(),
   };
 
   try {
@@ -85,8 +95,7 @@ export const submitFeatureRequest = async ({
   message: string;
   category?: FeatureRequestCategory;
 }) => {
-  const deviceType: FeatureRequest['deviceType'] =
-    Platform.OS === 'android' ? 'android' : Platform.OS === 'web' ? 'web' : 'ios';
+  const deviceType = resolveDeviceType();
   const entry: FeatureRequest = {
     id: Crypto.randomUUID(),
     message: message.trim(),
@@ -94,6 +103,7 @@ export const submitFeatureRequest = async ({
     timestamp: new Date().toISOString(),
     appVersion: Constants.expoConfig?.version || 'unknown',
     deviceType,
+    platform: deviceType,
   };
 
   try {

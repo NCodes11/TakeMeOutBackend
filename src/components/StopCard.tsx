@@ -9,11 +9,14 @@ type Props = {
   stop: Stop;
   onReroll?: () => void;
   onOpenMap?: () => void | Promise<void>;
+  /**
+   * When true, the reroll button shows a spinner and becomes disabled.
+   */
+  rerolling?: boolean;
 };
 
-export function StopCard({ stop, onReroll, onOpenMap }: Props) {
-  const timeLabel =
-    stop.startTime && stop.endTime ? `${stop.startTime}–${stop.endTime}` : undefined;
+export function StopCard({ stop, onReroll, onOpenMap, rerolling }: Props) {
+  const timeLabel = stop.startTime && stop.endTime ? `${stop.startTime}–${stop.endTime}` : undefined;
 
   return (
     <View style={styles.wrap}>
@@ -67,11 +70,24 @@ export function StopCard({ stop, onReroll, onOpenMap }: Props) {
           {(onOpenMap || onReroll) && (
             <View style={styles.actions}>
               {onOpenMap ? (
-                <SecondaryButton onPress={onOpenMap}>Open in Maps</SecondaryButton>
+                <View style={styles.actionItem}>
+                  <SecondaryButton onPress={onOpenMap}>Open in Maps</SecondaryButton>
+                </View>
               ) : null}
 
               {onReroll ? (
-                <SecondaryButton onPress={onReroll}>Reroll</SecondaryButton>
+                <View style={styles.actionItem}>
+                  <SecondaryButton
+                    disabled={Boolean(rerolling)}
+                    loading={Boolean(rerolling)}
+                    onPress={() => {
+                      if (rerolling) return;
+                      onReroll();
+                    }}
+                  >
+                    Reroll
+                  </SecondaryButton>
+                </View>
               ) : null}
             </View>
           )}
@@ -116,10 +132,18 @@ const styles = StyleSheet.create({
   meta: {
     color: palette.muted,
   },
+
+  // Keeps both buttons on the same row.
   actions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     gap: spacing.sm,
     marginTop: spacing.xs,
+  },
+
+  // Makes each button take equal space so widths don’t change when loading.
+  actionItem: {
+    flex: 1,
+    minWidth: 0,
   },
 });
