@@ -70,8 +70,8 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => 
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 6371 * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
@@ -86,7 +86,7 @@ const deterministicIndex = (seed: string, size: number) => {
 };
 
 /**
- * Distributes stop types across the requested stop count.
+ * Distributes stop types across the requested stop count while respecting per-type defaults.
  */
 export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: number): StopType[] => {
   const uniqueTypes = Array.from(new Set(selectedTypes));
@@ -95,9 +95,7 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
   if (uniqueTypes.length === 0) return [];
   if (uniqueTypes.length === 1) return Array.from({ length: target }, () => uniqueTypes[0]);
 
-  const sortedByImportance = [...uniqueTypes].sort(
-    (a, b) => TYPE_RULES[b].importance - TYPE_RULES[a].importance,
-  );
+  const sortedByImportance = [...uniqueTypes].sort((a, b) => TYPE_RULES[b].importance - TYPE_RULES[a].importance);
 
   const selected = target < uniqueTypes.length ? sortedByImportance.slice(0, target) : sortedByImportance;
   const counts = new Map<StopType, number>(selected.map((type) => [type, 1]));
@@ -118,9 +116,7 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
 
   // Second pass: if still short, allow repeats by repeatWeight priority.
   while (allocation.length < target) {
-    const sortedByRepeat = [...selected].sort(
-      (a, b) => TYPE_RULES[b].repeatWeight - TYPE_RULES[a].repeatWeight,
-    );
+    const sortedByRepeat = [...selected].sort((a, b) => TYPE_RULES[b].repeatWeight - TYPE_RULES[a].repeatWeight);
     const next = sortedByRepeat[0];
     allocation.push(next);
     counts.set(next, (counts.get(next) || 0) + 1);
@@ -130,13 +126,9 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
 };
 
 /**
- * Orders stop types into a logical day structure.
+ * Orders stop types into a rough "day shape" (coffee early, bar late, etc).
  */
-export const orderAllocation = (
-  allocationTokens: StopType[],
-  startTime: string,
-  endTime: string,
-): StopType[] => {
+export const orderAllocation = (allocationTokens: StopType[], startTime: string, endTime: string): StopType[] => {
   const tokens = [...allocationTokens];
   if (tokens.length <= 1) return tokens;
 
@@ -161,12 +153,14 @@ export const orderAllocation = (
   return enforceCapsAndAdjacency(ordered);
 };
 
+/**
+ * Avoids placing the same "no-repeat-adjacent" type back-to-back when there are alternatives.
+ */
 export const enforceCapsAndAdjacency = (tokens: StopType[]): StopType[] => {
   if (tokens.length <= 1) return tokens;
 
   const output = [...tokens];
 
-  // Swap forward duplicates with later alternatives where possible.
   for (let i = 1; i < output.length; i += 1) {
     const current = output[i];
     const prev = output[i - 1];
@@ -197,7 +191,9 @@ interface SelectionContext {
 }
 
 /**
- * Scores candidates and deterministically selects one from the top results.
+ * Scores candidates and deterministically selects one from the top few.
+ * To avoid "no results" due to travel-time strictness, candidates beyond maxTravel
+ * are penalized heavily instead of being discarded entirely.
  */
 export const selectPlaceForToken = ({
   token,
@@ -212,26 +208,37 @@ export const selectPlaceForToken = ({
   const prev = selected[selected.length - 1];
   const maxTravel = Math.max(5, input.preferences.maxTravelMinutes || 30);
 
-  // Rank by type match, quality signals, budget fit, and travel-time feasibility.
   const ranked = candidates
     .map((candidate) => {
       let score = 10;
 
-      score += candidate.stopType === token ? 8 : -6;
-      score += (candidate.rating || 0) * 1.5;
+      // Strong preference for matching token stopType (should already match in generator).
+      score += candidate.stopType === token ? 8 : -12;
 
+      // Quality signals.
+      score += (candidate.rating || 0) * 1.5;
+      score += Math.min(3, (candidate.reviewCount || 0) / 500);
+
+      // Budget fit.
       const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
       const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
       if (budgetScore <= -900) return { candidate, score: -999 };
       score += budgetScore;
 
+      // Slight bonus when open now (if known).
       if (candidate.openNow) score += 2;
 
+      // Travel feasibility from previous stop.
       if (prev) {
         const dist = haversineKm(prev.lat, prev.lng, candidate.lat, candidate.lng);
         const eta = (dist / estimatedSpeedKmh(input.transport)) * 60;
-        if (eta > maxTravel) return { candidate, score: -999 };
-        score += Math.max(0, 3 - eta / 10);
+
+        if (eta > maxTravel) {
+          // Penalize rather than reject, so the app can still find a stop in sparse areas.
+          score -= 15 + (eta - maxTravel) * 0.8;
+        } else {
+          score += Math.max(0, 3 - eta / 10);
+        }
       }
 
       return { candidate, score };
@@ -241,7 +248,7 @@ export const selectPlaceForToken = ({
 
   if (ranked.length === 0) return null;
 
-  const top = ranked.slice(0, Math.min(3, ranked.length));
+  const top = ranked.slice(0, Math.min(4, ranked.length));
   const pickIndex = deterministicIndex(`${seed}-${token}-${tokenIndex}`, top.length);
 
   return top[pickIndex].candidate;
@@ -256,7 +263,7 @@ export interface ScheduledStop extends PlaceCandidate {
 
 /**
  * Builds a time-based schedule that never exceeds the time window.
- * If travel or minimum durations do not fit, stops are reduced and durations shrink proportionally.
+ * If travel consumes too much time, tail stops are dropped.
  */
 export const scheduleItinerary = (
   orderedStops: PlaceCandidate[],
@@ -273,7 +280,6 @@ export const scheduleItinerary = (
 
   const maxTravel = Math.max(5, input.preferences.maxTravelMinutes || 30);
 
-  // Travel is derived from straight-line distance and capped by maxTravelMinutes.
   const computeTravel = (stops: PlaceCandidate[]) =>
     stops.map((_, i) => {
       if (i === 0) return 0;
@@ -289,7 +295,6 @@ export const scheduleItinerary = (
   let stops = [...orderedStops];
   let travel = computeTravel(stops);
 
-  // Trim tail stops until at least some stop-time fits inside the time window.
   while (stops.length > 1 && sum(travel) >= totalWindow) {
     stops = stops.slice(0, -1);
     travel = computeTravel(stops);
@@ -312,19 +317,15 @@ export const scheduleItinerary = (
 
   if (usable <= 0) return [];
 
-  const rules = stops.map(
-    (s) => DURATION_RULES[s.stopType] ?? { min: 20, max: 90, weight: 1.5 },
-  );
+  const rules = stops.map((s) => DURATION_RULES[s.stopType] ?? { min: 20, max: 90, weight: 1.5 });
 
   const weights = rules.map((r) => r.weight);
   const weightSum = weights.reduce((a, b) => a + b, 0) || 1;
 
-  const minSum = rules.reduce((sum, r) => sum + r.min, 0);
+  const minSum = rules.reduce((acc, r) => acc + r.min, 0);
 
   const effectiveMins =
-    minSum <= usable
-      ? rules.map((r) => r.min)
-      : rules.map((r) => Math.floor((r.min / minSum) * usable));
+    minSum <= usable ? rules.map((r) => r.min) : rules.map((r) => Math.max(1, Math.floor((r.min / minSum) * usable)));
 
   let durations = stops.map((_, i) => {
     const target = Math.round((usable * weights[i]) / weightSum);
@@ -332,7 +333,6 @@ export const scheduleItinerary = (
   });
 
   const normalize = (targetTotal: number) => {
-    // Rebalance durations so total exactly matches available minutes.
     for (let pass = 0; pass < 10; pass += 1) {
       const current = sum(durations);
       let diff = targetTotal - current;

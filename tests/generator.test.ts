@@ -1,11 +1,59 @@
 import { describe, expect, it } from 'vitest';
-import { generateStops } from '../src/services/generator';
+import { buildFeelingLuckyStopTypes, generateStops } from '../src/services/generator';
 
 const routing = {
   route: async (points: [number, number][]) => points.slice(0, -1).map(() => ({ distanceKm: 2, etaMin: 10, polyline: [] })),
 };
 
 describe('generator', () => {
+  it('builds a family-safe feeling lucky mix without bars', () => {
+    const mix = buildFeelingLuckyStopTypes({
+      city: 'Orlando,FL',
+      stopCount: 4,
+      date: '2026-01-01',
+      startTime: '09:00',
+      endTime: '18:00',
+      groupType: 'Family',
+      adults: 2,
+      kids: 2,
+      kidAges: [6, 10],
+      transport: 'drive',
+      budget: '$$',
+      feelingLucky: true,
+      preferences: { interests: [], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
+      startLocationMode: 'my-location',
+      startAddress: '',
+      returnToStart: true,
+    });
+
+    expect(mix.includes('bar')).toBe(false);
+    expect(mix.some((type) => type === 'activity' || type === 'outdoors' || type === 'attraction')).toBe(true);
+  });
+
+  it('keeps feeling lucky mix budget/travel constrained for low-budget short trips', () => {
+    const mix = buildFeelingLuckyStopTypes({
+      city: 'Orlando,FL',
+      stopCount: 4,
+      date: '2026-01-01',
+      startTime: '09:00',
+      endTime: '18:00',
+      groupType: 'Friends',
+      adults: 3,
+      kids: 0,
+      kidAges: [],
+      transport: 'walk',
+      budget: '$',
+      feelingLucky: true,
+      preferences: { interests: [], avoid: [], mustInclude: '', maxTravelMinutes: 15, kidFriendly: false, accessibleFriendly: false },
+      startLocationMode: 'my-location',
+      startAddress: '',
+      returnToStart: false,
+    });
+
+    expect(mix.includes('bar')).toBe(false);
+    expect(mix.includes('attraction')).toBe(false);
+  });
+
   it('generates requested stop count when enough candidates exist', async () => {
     const candidates = [
       { id: '1', name: 'Cafe One', lat: 37.77, lng: -122.41, category: 'Coffee/Dessert', address: 'A', tags: ['coffee'], stopType: 'coffee' },
@@ -27,6 +75,7 @@ describe('generator', () => {
         kidAges: [],
         transport: 'drive',
         budget: '$$',
+        feelingLucky: false,
         preferences: { interests: ['coffee'], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
         startLocationMode: 'my-location',
         startAddress: '',
@@ -63,6 +112,7 @@ describe('generator', () => {
         kidAges: [],
         transport: 'drive',
         budget: '$$',
+        feelingLucky: false,
         preferences: { interests: ['coffee', 'bar'], avoid: [], mustInclude: '', maxTravelMinutes: 30, kidFriendly: false, accessibleFriendly: false },
         startLocationMode: 'my-location',
         startAddress: '',

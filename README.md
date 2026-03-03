@@ -18,6 +18,30 @@ Take Me Out is an iPhone-ready itinerary creator/planner for dates/family/friend
 - OSRM and Overpass are public demo APIs for MVP and can throttle.
 - Cached plans remain available offline.
 
+## TL;DR Recent Patches
+
+- Added a deployable feedback backend in `/backend` with:
+  - `POST /tripFeedback`
+  - `POST /featureRequests`
+  - SQLite storage + migration script
+  - API key ingest auth (`X-Feedback-Key` / `FEEDBACK_INGEST_KEY`)
+  - admin dashboard at `/admin` (`ADMIN_TOKEN` auth)
+  - CSV/JSON exports for trip feedback + feature requests
+- Updated app feedback sender:
+  - optional `EXPO_PUBLIC_FEEDBACK_API_KEY` header injection
+  - includes metadata (`appVersion`, `deviceType`, `platform`)
+- Implemented `Feeling Lucky` planning mode:
+  - balanced stop-type mix when activities are not selected
+  - respects group type, budget, travel constraints, and return-to-start
+- Replaced freeform start/end times with 15-minute dropdowns:
+  - keeps `HH:MM` 24-hour format
+  - validates `end > start`
+  - auto-snaps end time forward when needed
+- Added tests:
+  - backend auth/storage/export tests
+  - feeling-lucky mix constraints
+  - time validation and snapping
+
 ## Updates Log
 
 ### 2026 Improvements
@@ -48,3 +72,22 @@ Take Me Out is an iPhone-ready itinerary creator/planner for dates/family/friend
   - validation messaging when no stop types are selected
   - start flow consolidated around a single Start Plan action with location fallback handling
 - Added project env setup docs for Google API key usage and local secret handling (`.env`, EAS secret guidance).
+
+## Feedback Backend Setup
+
+The app can optionally send feedback to a backend in addition to local SQLite storage.
+
+Set these in your app `.env`:
+
+```bash
+EXPO_PUBLIC_FEEDBACK_API_BASE_URL=https://your-backend.example.com
+EXPO_PUBLIC_FEEDBACK_API_KEY=your-ingest-key   # optional but recommended
+```
+
+Behavior:
+- If `EXPO_PUBLIC_FEEDBACK_API_BASE_URL` is missing, feedback remains local-only.
+- If `EXPO_PUBLIC_FEEDBACK_API_KEY` is set, requests include `X-Feedback-Key`.
+- If the key is not set, requests are still sent without the header (for compatibility).
+
+Backend docs and local run instructions are in:
+- `backend/README.md`
