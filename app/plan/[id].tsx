@@ -3,27 +3,32 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { Card, Checkbox, Text, TextInput } from 'react-native-paper';
 import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
+import { useTimeFormat } from '@/context/PreferencesContext';
 import { usePlanStore } from '@/store/usePlanStore';
 import * as Crypto from 'expo-crypto';
 import { getChecklist, saveChecklist } from '@/db/sqlite';
 import { palette, spacing } from '@/theme/appTheme';
+import { formatTimeDisplay } from '@/utils/time';
 
 export default function PlanDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const timeFormat = useTimeFormat();
   const stops = usePlanStore((s) => s.stopsByPlan[id] || []);
   const reorder = usePlanStore((s) => s.reorderStops);
   const [items, setItems] = useState(getChecklist(id));
   const [newItem, setNewItem] = useState('');
 
   return (
-    <AppScreen title="Plan Detail" subtitle="Reorder stops and prepare your checklist.">
+    <AppScreen title="Plan Detail">
       <AppCard>
         <Card.Content style={styles.content}>
       {/* Stop order controls write back through the store so generated/today views stay in sync. */}
       <Text variant="titleLarge">Reorder Stops</Text>
       {stops.map((s, i) => (
         <View key={s.id} style={styles.stopRow}>
-          <Text>{i + 1}. {s.name} ({s.startTime}-{s.endTime})</Text>
+          <Text>
+            {i + 1}. {s.name} ({formatTimeDisplay(s.startTime, timeFormat)}-{formatTimeDisplay(s.endTime, timeFormat)})
+          </Text>
           <View style={styles.stopActions}>
             <SecondaryButton compact disabled={i === 0} onPress={() => reorder(id, i, i - 1)}>↑</SecondaryButton>
             <SecondaryButton compact disabled={i === stops.length - 1} onPress={() => reorder(id, i, i + 1)}>↓</SecondaryButton>

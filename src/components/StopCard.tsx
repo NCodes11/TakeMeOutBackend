@@ -2,8 +2,10 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Card, Text } from 'react-native-paper';
 import { SecondaryButton } from '@/components/ui';
+import { useTimeFormat } from '@/context/PreferencesContext';
 import { Stop } from '@/types/models';
 import { palette, spacing } from '@/theme/appTheme';
+import { formatTimeDisplay } from '@/utils/time';
 
 type Props = {
   stop: Stop;
@@ -16,7 +18,10 @@ type Props = {
 };
 
 export function StopCard({ stop, onReroll, onOpenMap, rerolling }: Props) {
-  const timeLabel = stop.startTime && stop.endTime ? `${stop.startTime}–${stop.endTime}` : undefined;
+  const timeFormat = useTimeFormat();
+  const timeLabel = stop.startTime && stop.endTime
+    ? `${formatTimeDisplay(stop.startTime, timeFormat)}–${formatTimeDisplay(stop.endTime, timeFormat)}`
+    : undefined;
 
   return (
     <View style={styles.wrap}>

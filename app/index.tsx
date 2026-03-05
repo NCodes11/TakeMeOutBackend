@@ -4,10 +4,12 @@ import { Alert, StyleSheet, View } from 'react-native';
 import { Card, Modal, Portal, SegmentedButtons, Text, TextInput } from 'react-native-paper';
 import { AppCard, AppScreen, GhostButton, PrimaryButton } from '@/components/ui';
 import { useLocation } from '@/context/LocationContext';
+import { useTimeFormat } from '@/context/PreferencesContext';
 import { palette, spacing } from '@/theme/appTheme';
 
 export default function HomeScreen() {
   const { coords, placeLabel, permission, mode, updatedAt, refreshLocation, setMode, setManualLocation } = useLocation();
+  const timeFormat = useTimeFormat();
   const [manualInput, setManualInput] = useState(placeLabel);
   const [pending, setPending] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
@@ -100,53 +102,63 @@ export default function HomeScreen() {
   };
 
   return (
-    <AppScreen title="Take Me Out" subtitle="Build a real-world day plan in minutes.">
-      <AppCard>
-        <Card.Title title="Take Me Out" subtitle="Modern date and family itinerary planner" />
-        <Card.Content>
-          <SegmentedButtons
-            value={mode}
-            onValueChange={(value) => {
-              setPending(true);
-              setDetectError(null);
-              setMode(value as 'live' | 'manual')
-                .catch((e) => setDetectError(e instanceof Error ? e.message : 'Unable to switch location mode.'))
-                .finally(() => setPending(false));
-            }}
-            buttons={[{ value: 'live', label: 'Use Live GPS' }, { value: 'manual', label: 'Use Manual Location' }]}
-          />
-          <Text variant="bodySmall" style={styles.helperText}>
-            {mode === 'live'
-              ? `Live GPS • ${updatedAt ? `updated ${new Date(updatedAt).toLocaleTimeString()}` : 'waiting for fix'}`
-              : 'Manual mode • Start Plan will use the location you enter below'}
-          </Text>
-          <TextInput
-            label="City or location"
-            placeholder="Orlando, FL"
-            value={manualInput}
-            onChangeText={setManualInput}
-            editable={mode === 'manual'}
-            mode="outlined"
-            style={styles.input}
-          />
-          <Text variant="bodySmall" style={styles.helperText}>
-            Use the format `City,ST` for best results.
-          </Text>
-          <Text variant="bodySmall" style={styles.helperText}>
-            Permission: {permission}
-          </Text>
-          {detectError ? <Text style={styles.errorText}>{detectError}</Text> : null}
-          <View style={styles.row}>
-            <PrimaryButton
-              onPress={onStartPlan}
-              loading={pending}
-              disabled={pending}
-            >
-              Start Plan
-            </PrimaryButton>
-          </View>
-        </Card.Content>
-      </AppCard>
+    <AppScreen contentContainerStyle={styles.screenContent} style={styles.screenInner}>
+      <View style={styles.mainCluster}>
+        <View style={styles.brandWrap}>
+          <Text style={styles.brandTitle}>TAKE ME OUT</Text>
+        </View>
+        <AppCard>
+          <Card.Content>
+            <SegmentedButtons
+              value={mode}
+              onValueChange={(value) => {
+                setPending(true);
+                setDetectError(null);
+                setMode(value as 'live' | 'manual')
+                  .catch((e) => setDetectError(e instanceof Error ? e.message : 'Unable to switch location mode.'))
+                  .finally(() => setPending(false));
+              }}
+              buttons={[{ value: 'live', label: 'Use Live GPS' }, { value: 'manual', label: 'Use Manual Location' }]}
+            />
+            <Text variant="bodySmall" style={styles.helperText}>
+              {mode === 'live'
+                ? `Live GPS • ${
+                    updatedAt
+                      ? `updated ${new Date(updatedAt).toLocaleTimeString([], {
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: timeFormat === '12h',
+                        })}`
+                      : 'waiting for fix'
+                  }`
+                : 'Manual mode • Start Plan will use the location you enter below'}
+            </Text>
+            <TextInput
+              label="City or location"
+              placeholder="Orlando, FL"
+              value={manualInput}
+              onChangeText={setManualInput}
+              editable={mode === 'manual'}
+              mode="outlined"
+              style={styles.input}
+            />
+            {detectError ? <Text style={styles.errorText}>{detectError}</Text> : null}
+            <View style={styles.row}>
+              <PrimaryButton
+                onPress={onStartPlan}
+                loading={pending}
+                disabled={pending}
+              >
+                Start Plan
+              </PrimaryButton>
+            </View>
+          </Card.Content>
+        </AppCard>
+        <View style={styles.links}>
+          <GhostButton onPress={() => router.push('/saved')}>Saved Plans</GhostButton>
+          <GhostButton onPress={() => router.push('/settings')}>Settings</GhostButton>
+        </View>
+      </View>
       <Portal>
         <Modal visible={manualPromptVisible} onDismiss={() => setManualPromptVisible(false)} contentContainerStyle={styles.modal}>
           <Text variant="titleMedium" style={styles.modalTitle}>Choose a different location</Text>
@@ -165,18 +177,35 @@ export default function HomeScreen() {
           </View>
         </Modal>
       </Portal>
-      <View style={styles.links}>
-        <GhostButton onPress={() => router.push('/saved')}>Saved Plans</GhostButton>
-        <GhostButton onPress={() => router.push('/settings')}>Settings</GhostButton>
-      </View>
-      <Text variant="bodySmall" style={styles.tipText}>
-        Tip: If location access is denied, type your city manually.
-      </Text>
     </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  screenContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingVertical: spacing.xl,
+  },
+  screenInner: {
+    gap: spacing.lg,
+  },
+  mainCluster: {
+    gap: spacing.xl,
+  },
+  brandWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+  },
+  brandTitle: {
+    fontFamily: 'JosefinSans_700Bold',
+    fontSize: 34,
+    lineHeight: 38,
+    letterSpacing: 3,
+    color: palette.text,
+    textAlign: 'center',
+  },
   input: {
     backgroundColor: palette.surface,
   },
@@ -192,6 +221,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
     marginTop: spacing.md,
+    justifyContent: 'center',
   },
   modal: {
     margin: spacing.lg,
@@ -211,10 +241,7 @@ const styles = StyleSheet.create({
   },
   links: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    justifyContent: 'flex-start',
-  },
-  tipText: {
-    color: palette.muted,
+    gap: spacing.md,
+    justifyContent: 'center',
   },
 });

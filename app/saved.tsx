@@ -14,7 +14,7 @@ export default function SavedPlans() {
   const filtered = useMemo(() => plans.filter((p) => (group === 'all' || p.groupType === group) && `${p.city} ${p.date}`.toLowerCase().includes(q.toLowerCase())), [plans, q, group]);
 
   return (
-    <AppScreen title="Saved Plans" subtitle="Search and reopen your previous itineraries." scroll={false}>
+    <AppScreen title="Saved Plans" scroll={false}>
       <TextInput mode="outlined" label="Search city/date" value={q} onChangeText={setQ} />
       <SegmentedButtons value={group} onValueChange={setGroup} buttons={[{ value: 'all', label: 'All' }, { value: 'Date', label: 'Date' }, { value: 'Family', label: 'Family' }, { value: 'Friends', label: 'Friends' }]} />
       {filtered.length === 0 ? (

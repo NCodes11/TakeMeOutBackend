@@ -37,7 +37,7 @@ export default function FeatureRequestScreen() {
   };
 
   return (
-    <AppScreen title="Suggest a Feature" subtitle="Share ideas for beta improvements.">
+    <AppScreen title="Suggest a Feature">
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <AppCard>
           <View style={styles.content}>

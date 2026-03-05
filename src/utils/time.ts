@@ -1,5 +1,9 @@
 const MINUTES_PER_DAY = 24 * 60;
 const STEP_MINUTES = 15;
+const TIME_24H_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const TIME_12H_REGEX = /^(0?[1-9]|1[0-2]):([0-5]\d)\s?(AM|PM)$/i;
+
+export type TimeFormat = '12h' | '24h';
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
@@ -11,10 +15,36 @@ export const minutesToTime = (minutes: number) => {
 };
 
 export const parseTimeToMinutes = (time: string): number => {
-  const [h, m] = time.split(':').map((part) => Number(part));
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return Number.NaN;
-  if (h < 0 || h > 23 || m < 0 || m > 59) return Number.NaN;
+  const match = TIME_24H_REGEX.exec(time.trim());
+  if (!match) return Number.NaN;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
   return h * 60 + m;
+};
+
+export const formatTimeDisplay = (time24h: string, timeFormat: TimeFormat): string => {
+  if (timeFormat === '24h') return time24h;
+  const minutes = parseTimeToMinutes(time24h);
+  if (!Number.isFinite(minutes)) return time24h;
+  const hours24 = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const suffix = hours24 >= 12 ? 'PM' : 'AM';
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${hours12}:${pad(mins)} ${suffix}`;
+};
+
+export const parseTimeDisplayTo24h = (displayTime: string, timeFormat: TimeFormat): string => {
+  const normalized = displayTime.trim();
+  if (timeFormat === '24h') {
+    return TIME_24H_REGEX.test(normalized) ? normalized : '';
+  }
+  const match = TIME_12H_REGEX.exec(normalized);
+  if (!match) return '';
+  const hours12 = Number(match[1]);
+  const mins = Number(match[2]);
+  const meridiem = match[3].toUpperCase();
+  const hours24 = (hours12 % 12) + (meridiem === 'PM' ? 12 : 0);
+  return `${pad(hours24)}:${pad(mins)}`;
 };
 
 export const TIME_OPTIONS: string[] = Array.from(

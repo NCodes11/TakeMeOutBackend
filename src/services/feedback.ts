@@ -4,7 +4,44 @@ import { Platform } from 'react-native';
 import { saveFeatureRequest, saveTripFeedback } from '@/db/sqlite';
 import { FeatureRequest, FeatureRequestCategory, Plan, Stop, TripFeedback } from '@/types/models';
 
-const FEEDBACK_BASE_URL = process.env.EXPO_PUBLIC_FEEDBACK_API_BASE_URL?.trim();
+const parseHostFromUri = (value: string): string | undefined => {
+  const raw = value.trim();
+  if (!raw) return undefined;
+
+  if (/^(exp|exps|http|https):\/\//i.test(raw)) {
+    try {
+      return new URL(raw).hostname;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const withoutPath = raw.split('/')[0]?.trim();
+  const host = withoutPath?.split(':')[0]?.trim();
+  return host || undefined;
+};
+
+const resolveExpoHost = (): string | undefined => {
+  const candidates = [Constants.expoConfig?.hostUri, Constants.linkingUri];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const host = parseHostFromUri(candidate);
+    if (host) return host;
+  }
+  return undefined;
+};
+
+const resolveFeedbackBaseUrl = (): string | undefined => {
+  const explicitBaseUrl = process.env.EXPO_PUBLIC_FEEDBACK_API_BASE_URL?.trim();
+  if (explicitBaseUrl) return explicitBaseUrl;
+
+  // Expo Go convenience fallback: use Metro host with backend default port.
+  const expoHost = resolveExpoHost();
+  if (!expoHost) return undefined;
+  return `http://${expoHost}:4000`;
+};
+
+const FEEDBACK_BASE_URL = resolveFeedbackBaseUrl();
 const FEEDBACK_API_KEY = process.env.EXPO_PUBLIC_FEEDBACK_API_KEY?.trim();
 
 const resolveDeviceType = (): FeatureRequest['deviceType'] =>
@@ -33,13 +70,19 @@ const postToBackend = async (path: string, payload: Record<string, unknown>) => 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (FEEDBACK_API_KEY) headers['X-Feedback-Key'] = FEEDBACK_API_KEY;
 
-    await fetch(`${FEEDBACK_BASE_URL.replace(/\/+$/, '')}/${path}`, {
+    const response = await fetch(`${FEEDBACK_BASE_URL.replace(/\/+$/, '')}/${path}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
     });
-  } catch {
-    // Fail silently for beta feedback collection.
+    if (!response.ok) {
+      throw new Error(`feedback_backend_${response.status}`);
+    }
+  } catch (error) {
+    // Keep UX resilient while still surfacing diagnostics in dev.
+    if (__DEV__) {
+      console.warn(`[feedback] Failed to sync "${path}" to ${FEEDBACK_BASE_URL}`, error);
+    }
   }
 };
 

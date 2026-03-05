@@ -36,20 +36,6 @@ export const featureRequestSchema = z
 export type TripFeedbackIngest = z.infer<typeof tripFeedbackSchema>;
 export type FeatureRequestIngest = z.infer<typeof featureRequestSchema>;
 
-export const adminFilterSchema = z
-  .object({
-    startDate: z.string().optional(),
-    endDate: z.string().optional(),
-    thumbsUp: z.enum(['all', 'up', 'down']).optional().default('all'),
-    category: z.string().optional(),
-    city: z.string().optional(),
-    state: z.string().optional(),
-    q: z.string().optional(),
-  })
-  .strip();
-
-export type AdminFilters = z.infer<typeof adminFilterSchema>;
-
 export interface RequestMetadata {
   receivedAt: string;
   userAgent?: string;

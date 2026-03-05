@@ -3,7 +3,7 @@ import { StopCard } from '@/components/StopCard';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { usePlanStore } from '@/store/usePlanStore';
-import { exportIcs, planCode, shareJson } from '@/utils/share';
+import { planCode } from '@/utils/share';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Alert, Linking, StyleSheet, View } from 'react-native';
 import { Card, SegmentedButtons, Text } from 'react-native-paper';
@@ -104,7 +104,10 @@ export default function GeneratedPlanScreen() {
   };
 
   return (
-    <AppScreen title={plan.title} subtitle={`${plan.city} · ${plan.date}`}>
+    <AppScreen>
+      <Text variant="headlineSmall" style={styles.topTitle}>
+        {plan.city} · {plan.date}
+      </Text>
       <SegmentedButtons
         value={view}
         onValueChange={(v) => {
@@ -210,8 +213,6 @@ export default function GeneratedPlanScreen() {
       <View style={styles.actions}>
         <SecondaryButton onPress={() => router.push(`/plan/${id}`)}>Plan detail</SecondaryButton>
         <PrimaryButton onPress={() => router.push(`/today/${id}`)}>Today mode</PrimaryButton>
-        <SecondaryButton onPress={() => shareJson(plan, stops)}>Share JSON</SecondaryButton>
-        <SecondaryButton onPress={() => exportIcs(plan, stops)}>Export .ics</SecondaryButton>
       </View>
 
       <PrimaryButton onPress={() => setFeedbackVisible(true)}>Finish Day</PrimaryButton>
@@ -240,6 +241,13 @@ export default function GeneratedPlanScreen() {
 }
 
 const styles = StyleSheet.create({
+  topTitle: {
+    color: palette.text,
+    fontWeight: '700',
+    marginBottom: spacing.xs,
+    textAlign: 'center',
+    width: '100%',
+  },
   actions: {
     flexDirection: 'row',
     flexWrap: 'wrap',

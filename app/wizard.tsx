@@ -6,10 +6,11 @@ import Slider from '@react-native-community/slider';
 import { AppCard, AppScreen, PrimaryButton } from '@/components/ui';
 import { STOP_TYPE_OPTIONS, stopTypeLabel } from '@/constants/stopTypes';
 import { useLocation } from '@/context/LocationContext';
+import { useTimeFormat } from '@/context/PreferencesContext';
 import { usePlanStore } from '@/store/usePlanStore';
 import { BudgetType, GroupType, StopType, TransportType, WizardInput } from '@/types/models';
 import { palette, spacing } from '@/theme/appTheme';
-import { END_TIME_OPTIONS, START_TIME_OPTIONS, snapEndTimeAfterStart } from '@/utils/time';
+import { END_TIME_OPTIONS, START_TIME_OPTIONS, formatTimeDisplay, snapEndTimeAfterStart } from '@/utils/time';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
@@ -41,6 +42,7 @@ const defaultInput = (city: string): WizardInput => ({
 export default function WizardScreen() {
   const params = useLocalSearchParams<{ city?: string; originLat?: string; originLng?: string }>();
   const location = useLocation();
+  const timeFormat = useTimeFormat();
   const [input, setInput] = useState(defaultInput(params.city || ''));
   const createPlan = usePlanStore((s) => s.createPlan);
   const loading = usePlanStore((s) => s.loading);
@@ -124,13 +126,10 @@ export default function WizardScreen() {
   };
 
   return (
-    <AppScreen title="Take Me Out" subtitle="Fine-tune your real-world plan before generating stops.">
+    <AppScreen>
       <AppCard>
         <Card.Content style={styles.content}>
           <TextInput label="City" value={input.city} onChangeText={(v) => setInput({ ...input, city: v })} mode="outlined" />
-          <Text variant="bodySmall" style={styles.helperText}>
-            Tip: use `City,ST` for best location matching.
-          </Text>
 
           <TextInput label="Date" value={input.date} onChangeText={(v) => setInput({ ...input, date: v })} mode="outlined" />
 
@@ -145,13 +144,13 @@ export default function WizardScreen() {
                   contentStyle={styles.timeButtonContent}
                   style={styles.timeButton}
                 >
-                  Start: {input.startTime}
+                  Start: {formatTimeDisplay(input.startTime, timeFormat)}
                 </Button>
               }
             >
               <ScrollView style={styles.timeMenuScroll}>
                 {START_TIME_OPTIONS.map((option) => (
-                  <Menu.Item key={option} onPress={() => onSelectStartTime(option)} title={option} />
+                  <Menu.Item key={option} onPress={() => onSelectStartTime(option)} title={formatTimeDisplay(option, timeFormat)} />
                 ))}
               </ScrollView>
             </Menu>
@@ -166,21 +165,17 @@ export default function WizardScreen() {
                   contentStyle={styles.timeButtonContent}
                   style={styles.timeButton}
                 >
-                  End: {input.endTime}
+                  End: {formatTimeDisplay(input.endTime, timeFormat)}
                 </Button>
               }
             >
               <ScrollView style={styles.timeMenuScroll}>
                 {END_TIME_OPTIONS.map((option) => (
-                  <Menu.Item key={option} onPress={() => onSelectEndTime(option)} title={option} />
+                  <Menu.Item key={option} onPress={() => onSelectEndTime(option)} title={formatTimeDisplay(option, timeFormat)} />
                 ))}
               </ScrollView>
             </Menu>
           </View>
-
-          <Text variant="bodySmall" style={styles.helperText}>
-            Times use 24h format in 15-minute increments.
-          </Text>
 
           <SegmentedButtons
             value={input.groupType}
@@ -214,9 +209,6 @@ export default function WizardScreen() {
           <Text variant="titleSmall" style={styles.sectionTitle}>
             Stop types
           </Text>
-          <Text variant="bodySmall" style={styles.helperText}>
-            Choose where your plan should go, or turn on Feeling Lucky to auto-pick a balanced day.
-          </Text>
 
           <View style={styles.switchRow}>
             <Text>Feeling Lucky</Text>
@@ -243,9 +235,6 @@ export default function WizardScreen() {
 
           <Text variant="titleSmall" style={styles.sectionTitle}>
             Number of Stops
-          </Text>
-          <Text variant="bodySmall" style={styles.helperText}>
-            Select between 1 and 8 stops.
           </Text>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>

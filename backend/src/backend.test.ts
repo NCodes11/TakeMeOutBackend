@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import request from 'supertest';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from './app.js';
 
 const makeTempDbPath = () => {
@@ -16,13 +17,14 @@ afterEach(() => {
   for (const dir of cleanupDirs.splice(0, cleanupDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  vi.restoreAllMocks();
 });
 
 describe('feedback backend', () => {
   it('rejects unauthorized ingest requests', async () => {
     const { dir, dbPath } = makeTempDbPath();
     cleanupDirs.push(dir);
-    const app = createApp({ dbPath, ingestKey: 'top-secret', adminToken: 'admin-token', nodeEnv: 'test' });
+    const app = createApp({ dbPath, ingestKey: 'top-secret', nodeEnv: 'test' });
 
     await request(app)
       .post('/tripFeedback')
@@ -36,10 +38,10 @@ describe('feedback backend', () => {
       .expect(401);
   });
 
-  it('stores valid trip feedback payloads', async () => {
+  it('stores valid trip feedback and feature requests in SQLite', async () => {
     const { dir, dbPath } = makeTempDbPath();
     cleanupDirs.push(dir);
-    const app = createApp({ dbPath, ingestKey: 'top-secret', adminToken: 'admin-token', nodeEnv: 'test' });
+    const app = createApp({ dbPath, ingestKey: 'top-secret', nodeEnv: 'test' });
 
     await request(app)
       .post('/tripFeedback')
@@ -61,22 +63,6 @@ describe('feedback backend', () => {
       })
       .expect(200);
 
-    const response = await request(app)
-      .get('/admin/export/tripFeedback.json')
-      .query({ token: 'admin-token' })
-      .expect(200);
-
-    expect(Array.isArray(response.body)).toBe(true);
-    expect(response.body).toHaveLength(1);
-    expect(response.body[0].id).toBe('trip-2');
-    expect(response.body[0].trip_id).toBe('plan-2');
-  });
-
-  it('exports feature requests as CSV', async () => {
-    const { dir, dbPath } = makeTempDbPath();
-    cleanupDirs.push(dir);
-    const app = createApp({ dbPath, ingestKey: 'top-secret', adminToken: 'admin-token', nodeEnv: 'test' });
-
     await request(app)
       .post('/featureRequests')
       .set('X-Feedback-Key', 'top-secret')
@@ -89,13 +75,80 @@ describe('feedback backend', () => {
       })
       .expect(200);
 
-    const response = await request(app)
-      .get('/admin/export/featureRequests.csv')
-      .query({ token: 'admin-token' })
+    const db = new Database(dbPath, { readonly: true });
+    const tripCount = db.prepare('SELECT COUNT(*) AS c FROM trip_feedback').get() as { c: number };
+    const featureCount = db.prepare('SELECT COUNT(*) AS c FROM feature_requests').get() as { c: number };
+    db.close();
+    expect(tripCount.c).toBe(1);
+    expect(featureCount.c).toBe(1);
+  });
+
+  it('routes alerts to discord webhooks by feedback type', async () => {
+    const { dir, dbPath } = makeTempDbPath();
+    cleanupDirs.push(dir);
+    const app = createApp({
+      dbPath,
+      ingestKey: 'top-secret',
+      fallbackWebhookUrl: 'https://alerts.example/fallback',
+      discordTripFeedbackWebhookUrl: 'https://alerts.example/trips',
+      discordTripDownWebhookUrl: 'https://alerts.example/trip-down',
+      discordFeatureWebhookUrl: 'https://alerts.example/features',
+      nodeEnv: 'test',
+    });
+
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await request(app)
+      .post('/tripFeedback')
+      .set('X-Feedback-Key', 'top-secret')
+      .send({
+        id: 'trip-no-alert',
+        tripId: 'plan-ok',
+        thumbsUp: true,
+        stopCount: 3,
+        priceTier: '$$',
+      })
       .expect(200);
 
-    expect(response.headers['content-type']).toContain('text/csv');
-    expect(response.text).toContain('id,message,category');
-    expect(response.text).toContain('feature-1');
+    await request(app)
+      .post('/tripFeedback')
+      .set('X-Feedback-Key', 'top-secret')
+      .send({
+        id: 'trip-alert',
+        tripId: 'plan-bad',
+        thumbsUp: false,
+        feedbackText: 'Too much travel time.',
+        stopCount: 3,
+        priceTier: '$$',
+      })
+      .expect(200);
+
+    await request(app)
+      .post('/featureRequests')
+      .set('X-Feedback-Key', 'top-secret')
+      .send({
+        id: 'feature-alert',
+        message: 'Please add rainy day mode.',
+        category: 'New Feature',
+      })
+      .expect(200);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      1,
+      'https://alerts.example/trips',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      'https://alerts.example/trip-down',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      'https://alerts.example/features',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

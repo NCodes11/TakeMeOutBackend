@@ -1,6 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Linking, StyleSheet, View } from 'react-native';
+import { Linking, StyleSheet } from 'react-native';
 import { ActivityIndicator, Card, Text } from 'react-native-paper';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
@@ -58,7 +58,7 @@ export default function TodayMode() {
   else if (originError) helperText = originError;
 
   return (
-    <AppScreen title="Today Mode" subtitle="Live navigation from your current location.">
+    <AppScreen title="Today Mode">
       <AppCard>
         <Card.Title title="Next Stop" subtitle={next.name} />
         <Card.Content>
@@ -75,11 +75,6 @@ export default function TodayMode() {
         {originLoading ? <ActivityIndicator style={styles.loader} size="small" color={palette.primary} /> : null}
       </AppCard>
       {plan ? <PrimaryButton onPress={() => setFeedbackVisible(true)}>Finish Day</PrimaryButton> : null}
-      <View style={styles.tipWrap}>
-        <Text variant="bodySmall" style={styles.tipText}>
-          Offline tip: Saved plans remain available from local SQLite cache.
-        </Text>
-      </View>
       {plan ? (
         <FeedbackModal
           visible={feedbackVisible}
@@ -103,11 +98,5 @@ const styles = StyleSheet.create({
   },
   loader: {
     marginBottom: spacing.md,
-  },
-  tipWrap: {
-    paddingHorizontal: spacing.xs,
-  },
-  tipText: {
-    color: palette.muted,
   },
 });

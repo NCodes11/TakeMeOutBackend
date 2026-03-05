@@ -1,14 +1,17 @@
 # Feedback Backend
 
-Minimal Express + SQLite backend for beta feedback ingestion, admin review, and export.
+Express + SQLite ingest backend that forwards incoming feedback to Discord webhooks.
 
 ## Required Env Vars
 
 - `FEEDBACK_INGEST_KEY`: API key expected in `X-Feedback-Key` for `POST /tripFeedback` and `POST /featureRequests`.
-- `ADMIN_TOKEN`: token required for `/admin` and `/admin/export/*`.
+- `DISCORD_WEBHOOK_TRIP_FEEDBACK`: Discord webhook URL for trip feedback channel.
+- `DISCORD_WEBHOOK_FEATURE_REQUESTS`: Discord webhook URL for feature-request channel.
 
 ## Optional Env Vars
 
+- `DISCORD_WEBHOOK_TRIP_DOWN`: overrides thumbs-down trip feedback to a separate Discord channel.
+- `FEEDBACK_ALERT_WEBHOOK_URL`: fallback webhook if a Discord-specific webhook is missing.
 - `PORT`: server port (default `4000`)
 - `FEEDBACK_DB_PATH`: SQLite path (default `./data/feedback.sqlite`)
 - `NODE_ENV`: use `production` to disable verbose request logging.
@@ -19,6 +22,9 @@ Minimal Express + SQLite backend for beta feedback ingestion, admin review, and 
 cd backend
 npm install
 npm run migrate
+FEEDBACK_INGEST_KEY=dev-ingest-key \
+DISCORD_WEBHOOK_TRIP_FEEDBACK=https://discord.com/api/webhooks/... \
+DISCORD_WEBHOOK_FEATURE_REQUESTS=https://discord.com/api/webhooks/... \
 npm run dev
 ```
 
@@ -28,7 +34,23 @@ Server: `http://localhost:4000`
 - Ingest:
   - `POST /tripFeedback`
   - `POST /featureRequests`
-- Admin: `GET /admin?token=YOUR_ADMIN_TOKEN`
+
+## App Wiring
+
+In app `.env`:
+
+```bash
+EXPO_PUBLIC_FEEDBACK_API_BASE_URL=https://YOUR_BACKEND
+EXPO_PUBLIC_FEEDBACK_API_KEY=YOUR_FEEDBACK_INGEST_KEY
+```
+
+## Discord Routing
+
+- Trip feedback -> `DISCORD_WEBHOOK_TRIP_FEEDBACK`
+- Trip thumbs-down -> `DISCORD_WEBHOOK_TRIP_DOWN` (if set), otherwise trip webhook
+- Feature requests -> `DISCORD_WEBHOOK_FEATURE_REQUESTS`
+
+Webhook payload includes both `content` and `text` for Discord/Slack compatibility.
 
 ## Tests
 
@@ -46,10 +68,11 @@ npm test
 5. Start Command: `npm run start`
 6. Add environment variables:
    - `FEEDBACK_INGEST_KEY`
-   - `ADMIN_TOKEN`
+   - `DISCORD_WEBHOOK_TRIP_FEEDBACK`
+   - `DISCORD_WEBHOOK_FEATURE_REQUESTS`
+   - Optional: `DISCORD_WEBHOOK_TRIP_DOWN`
+   - Optional: `FEEDBACK_ALERT_WEBHOOK_URL`
    - `FEEDBACK_DB_PATH=/opt/render/project/src/backend/data/feedback.sqlite`
    - `NODE_ENV=production`
 7. Deploy and copy your service URL.
-8. In the app env, set `EXPO_PUBLIC_FEEDBACK_API_BASE_URL` to that URL.
-
-Note: Render disks are ephemeral unless you attach persistent storage. For long-term retention, attach a disk or migrate to managed Postgres.
+8. In app `.env`, set `EXPO_PUBLIC_FEEDBACK_API_BASE_URL` to that URL.
