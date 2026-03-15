@@ -1,18 +1,49 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
-import { Button, Card, Chip, Menu, SegmentedButtons, Switch, Text, TextInput } from 'react-native-paper';
+import {
+  Button,
+  Card,
+  Chip,
+  Menu,
+  SegmentedButtons,
+  Switch,
+  Text,
+  TextInput,
+  useTheme,
+} from 'react-native-paper';
 import Slider from '@react-native-community/slider';
-import { AppCard, AppScreen, PrimaryButton } from '@/components/ui';
+import { GenerationLoadingOverlay } from '@/components/GenerationLoadingOverlay';
+import { AppCard, AppScreen, ChoiceButtonGroup, PrimaryButton } from '@/components/ui';
+import { GROUP_TYPE_OPTIONS } from '@/constants/groupTypes';
 import { STOP_TYPE_OPTIONS, stopTypeLabel } from '@/constants/stopTypes';
 import { useLocation } from '@/context/LocationContext';
 import { useTimeFormat } from '@/context/PreferencesContext';
 import { usePlanStore } from '@/store/usePlanStore';
-import { BudgetType, GroupType, StopType, TransportType, WizardInput } from '@/types/models';
-import { palette, spacing } from '@/theme/appTheme';
+import { BudgetType, StopType, TransportType, WizardInput } from '@/types/models';
+import { spacing } from '@/theme/appTheme';
 import { END_TIME_OPTIONS, START_TIME_OPTIONS, formatTimeDisplay, snapEndTimeAfterStart } from '@/utils/time';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+const MIN_TRAVEL_MINUTES = 5;
+const MAX_TRAVEL_MINUTES = 90;
+const DEFAULT_TRAVEL_MINUTES = 30;
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+const isValidDateInput = (value: string) => {
+  if (!DATE_REGEX.test(value)) return false;
+
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return false;
+
+  return (
+    date.getFullYear() === year &&
+    date.getMonth() + 1 === month &&
+    date.getDate() === day
+  );
+};
 
 const defaultInput = (city: string): WizardInput => ({
   city,
@@ -30,7 +61,7 @@ const defaultInput = (city: string): WizardInput => ({
     interests: [],
     avoid: [],
     mustInclude: '',
-    maxTravelMinutes: 30,
+    maxTravelMinutes: DEFAULT_TRAVEL_MINUTES,
     accessibleFriendly: false,
   },
   startLocationMode: 'my-location',
@@ -40,20 +71,34 @@ const defaultInput = (city: string): WizardInput => ({
 });
 
 export default function WizardScreen() {
+  const theme = useTheme();
   const params = useLocalSearchParams<{ city?: string; originLat?: string; originLng?: string }>();
   const location = useLocation();
   const timeFormat = useTimeFormat();
-  const [input, setInput] = useState(defaultInput(params.city || ''));
-  const createPlan = usePlanStore((s) => s.createPlan);
-  const loading = usePlanStore((s) => s.loading);
-  const error = usePlanStore((s) => s.error);
 
-  /**
-   * Slider state is kept separate from input so the slider stays smooth.
-   */
-  const [maxTravel, setMaxTravel] = useState<number>(input.preferences.maxTravelMinutes ?? 30);
+  const [input, setInput] = useState<WizardInput>(() => defaultInput(params.city || ''));
+  const [maxTravel, setMaxTravel] = useState<number>(DEFAULT_TRAVEL_MINUTES);
   const [startMenuVisible, setStartMenuVisible] = useState(false);
   const [endMenuVisible, setEndMenuVisible] = useState(false);
+
+  const createPlan = usePlanStore((s) => s.createPlan);
+  const loading = usePlanStore((s) => s.loading);
+  const loadingProgress = usePlanStore((s) => s.loadingProgress);
+  const error = usePlanStore((s) => s.error);
+
+  const updateInput = (patch: Partial<WizardInput>) => {
+    setInput((prev) => ({ ...prev, ...patch }));
+  };
+
+  const updatePreferences = (patch: Partial<WizardInput['preferences']>) => {
+    setInput((prev) => ({
+      ...prev,
+      preferences: {
+        ...prev.preferences,
+        ...patch,
+      },
+    }));
+  };
 
   useEffect(() => {
     const lat = params.originLat ? Number(params.originLat) : undefined;
@@ -63,7 +108,7 @@ export default function WizardScreen() {
 
     setInput((prev) => ({
       ...prev,
-      city: params.city || prev.city,
+      city: prev.city || params.city || prev.city,
       startLat: hasLat ? lat : prev.startLat,
       startLng: hasLng ? lng : prev.startLng,
     }));
@@ -71,35 +116,46 @@ export default function WizardScreen() {
 
   useEffect(() => {
     if (!location.coords) return;
+
     setInput((prev) => ({
       ...prev,
-      city: location.placeLabel || prev.city,
+      city: prev.city || location.placeLabel || prev.city,
       startLat: location.coords?.latitude ?? prev.startLat,
       startLng: location.coords?.longitude ?? prev.startLng,
     }));
   }, [location.coords, location.placeLabel]);
 
   useEffect(() => {
-    const v = typeof input.preferences.maxTravelMinutes === 'number' ? input.preferences.maxTravelMinutes : 30;
-    setMaxTravel(v);
+    const value =
+      typeof input.preferences.maxTravelMinutes === 'number'
+        ? input.preferences.maxTravelMinutes
+        : DEFAULT_TRAVEL_MINUTES;
+
+    setMaxTravel(clamp(value, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES));
   }, [input.preferences.maxTravelMinutes]);
 
-  const toggleInterest = (name: string) =>
-    setInput((p) => {
-      const interests = p.preferences.interests.includes(name)
-        ? p.preferences.interests.filter((i) => i !== name)
-        : [...p.preferences.interests, name];
+  const toggleInterest = (name: string) => {
+    setInput((prev) => {
+      const interests = prev.preferences.interests.includes(name)
+        ? prev.preferences.interests.filter((i) => i !== name)
+        : [...prev.preferences.interests, name];
 
-      console.log('[plan] selected_stop_types', interests.map((type) => stopTypeLabel(type as StopType)));
+      if (__DEV__) {
+        console.log(
+          '[plan] selected_stop_types',
+          interests.map((type) => stopTypeLabel(type as StopType))
+        );
+      }
 
       return {
-        ...p,
+        ...prev,
         preferences: {
-          ...p.preferences,
+          ...prev.preferences,
           interests,
         },
       };
     });
+  };
 
   const sliderLabel = useMemo(() => {
     if (maxTravel <= 10) return `${maxTravel} min (tight)`;
@@ -125,256 +181,370 @@ export default function WizardScreen() {
     setEndMenuVisible(false);
   };
 
+  const hasSelectedStopTypes = input.preferences.interests.length > 0;
+  const hasValidStops = input.feelingLucky || hasSelectedStopTypes;
+  const hasValidCity = input.city.trim().length > 0;
+  const hasValidDate = isValidDateInput(input.date);
+
+  const isSubmitDisabled = loading || !hasValidCity || !hasValidDate || !hasValidStops;
+
+  const handleGenerate = async () => {
+    if (isSubmitDisabled) return;
+
+    try {
+      const fresh = await location
+        .refreshLocation()
+        .catch(() => ({ coords: location.coords, placeLabel: location.placeLabel }));
+
+      const lat = fresh.coords?.latitude ?? input.startLat;
+      const lng = fresh.coords?.longitude ?? input.startLng;
+      const city = input.city.trim() || fresh.placeLabel || '';
+
+      const payload: WizardInput = {
+        ...input,
+        city,
+        endTime: snapEndTimeAfterStart(input.startTime, input.endTime),
+        startLat: lat,
+        startLng: lng,
+        preferences: {
+          ...input.preferences,
+          maxTravelMinutes: clamp(maxTravel, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES),
+        },
+      };
+
+      if (__DEV__) {
+        console.log('[plan] wizard_submit', {
+          city,
+          origin: { lat, lng },
+          stopCount: payload.stopCount,
+          selectedTypes: payload.preferences.interests,
+          maxTravelMinutes: payload.preferences.maxTravelMinutes,
+        });
+      }
+
+      const id = await createPlan(payload);
+
+      if (!id) {
+        if (__DEV__) {
+          console.warn('[plan] createPlan returned no id');
+        }
+        return;
+      }
+
+      router.push(`/generated/${id}`);
+    } catch (submitError) {
+      console.error('[plan] wizard_submit_failed', submitError);
+    }
+  };
+
   return (
-    <AppScreen>
-      <AppCard>
-        <Card.Content style={styles.content}>
-          <TextInput label="City" value={input.city} onChangeText={(v) => setInput({ ...input, city: v })} mode="outlined" />
+    <>
+    <AppScreen title="Plan your day">
+      <Stack.Screen
+        options={{
+          title: 'TAKE ME OUT',
+          headerBackTitle: 'Home',
+        }}
+      />
 
-          <TextInput label="Date" value={input.date} onChangeText={(v) => setInput({ ...input, date: v })} mode="outlined" />
-
-          <View style={styles.row}>
-            <Menu
-              visible={startMenuVisible}
-              onDismiss={() => setStartMenuVisible(false)}
-              anchor={
-                <Button
-                  mode="outlined"
-                  onPress={() => setStartMenuVisible(true)}
-                  contentStyle={styles.timeButtonContent}
-                  style={styles.timeButton}
-                >
-                  Start: {formatTimeDisplay(input.startTime, timeFormat)}
-                </Button>
-              }
-            >
-              <ScrollView style={styles.timeMenuScroll}>
-                {START_TIME_OPTIONS.map((option) => (
-                  <Menu.Item key={option} onPress={() => onSelectStartTime(option)} title={formatTimeDisplay(option, timeFormat)} />
-                ))}
-              </ScrollView>
-            </Menu>
-
-            <Menu
-              visible={endMenuVisible}
-              onDismiss={() => setEndMenuVisible(false)}
-              anchor={
-                <Button
-                  mode="outlined"
-                  onPress={() => setEndMenuVisible(true)}
-                  contentStyle={styles.timeButtonContent}
-                  style={styles.timeButton}
-                >
-                  End: {formatTimeDisplay(input.endTime, timeFormat)}
-                </Button>
-              }
-            >
-              <ScrollView style={styles.timeMenuScroll}>
-                {END_TIME_OPTIONS.map((option) => (
-                  <Menu.Item key={option} onPress={() => onSelectEndTime(option)} title={formatTimeDisplay(option, timeFormat)} />
-                ))}
-              </ScrollView>
-            </Menu>
-          </View>
-
-          <SegmentedButtons
-            value={input.groupType}
-            onValueChange={(v) => setInput({ ...input, groupType: v as GroupType })}
-            buttons={[
-              { value: 'Date', label: 'Date' },
-              { value: 'Family', label: 'Family' },
-              { value: 'Friends', label: 'Friends' },
-            ]}
-          />
-
-          <SegmentedButtons
-            value={input.transport}
-            onValueChange={(v) => setInput({ ...input, transport: v as TransportType })}
-            buttons={[
-              { value: 'walk', label: 'Walk' },
-              { value: 'drive', label: 'Drive' },
-            ]}
-          />
-
-          <SegmentedButtons
-            value={input.budget}
-            onValueChange={(v) => setInput({ ...input, budget: v as BudgetType })}
-            buttons={[
-              { value: '$', label: '$' },
-              { value: '$$', label: '$$' },
-              { value: '$$$', label: '$$$' },
-            ]}
-          />
-
-          <Text variant="titleSmall" style={styles.sectionTitle}>
-            Stop types
-          </Text>
-
-          <View style={styles.switchRow}>
-            <Text>Feeling Lucky</Text>
-            <Switch value={input.feelingLucky} onValueChange={(v) => setInput((prev) => ({ ...prev, feelingLucky: v }))} />
-          </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-            {STOP_TYPE_OPTIONS.map((option) => (
-              <Chip
-                key={option.id}
-                selected={input.preferences.interests.includes(option.id)}
-                onPress={() => toggleInterest(option.id)}
-              >
-                {option.label}
-              </Chip>
-            ))}
-          </ScrollView>
-
-          {input.preferences.interests.length === 0 && !input.feelingLucky ? (
-            <Text variant="bodySmall" style={styles.emptyHint}>
-              Select at least one stop type or enable Feeling Lucky.
+      <ScrollView contentContainerStyle={styles.container}>
+        <AppCard>
+          <Card.Content style={styles.section}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
+              Location
             </Text>
-          ) : null}
 
-          <Text variant="titleSmall" style={styles.sectionTitle}>
-            Number of Stops
-          </Text>
+            <TextInput
+              label="City"
+              value={input.city}
+              onChangeText={(value) => updateInput({ city: value })}
+              mode="outlined"
+            />
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
-              <Chip key={count} selected={input.stopCount === count} onPress={() => setInput((prev) => ({ ...prev, stopCount: count }))}>
-                {count}
-              </Chip>
-            ))}
-          </ScrollView>
+            <TextInput
+              label="Date"
+              value={input.date}
+              onChangeText={(value) => updateInput({ date: value })}
+              mode="outlined"
+              placeholder="YYYY-MM-DD"
+              error={input.date.length > 0 && !hasValidDate}
+            />
 
-          <TextInput
-            label="Avoid list (comma separated)"
-            value={input.preferences.avoid.join(',')}
-            onChangeText={(v) =>
-              setInput({
-                ...input,
-                preferences: {
-                  ...input.preferences,
-                  avoid: v
+            {input.date.length > 0 && !hasValidDate ? (
+              <Text variant="bodySmall" style={{ color: theme.colors.error }}>
+                Enter a valid date in YYYY-MM-DD format.
+              </Text>
+            ) : null}
+          </Card.Content>
+        </AppCard>
+
+        <AppCard>
+          <Card.Content style={styles.section}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
+              Time
+            </Text>
+
+            <View style={styles.row}>
+              <Menu
+                visible={startMenuVisible}
+                onDismiss={() => setStartMenuVisible(false)}
+                anchor={
+                  <Button mode="outlined" onPress={() => setStartMenuVisible(true)} style={styles.timeButton}>
+                    Start: {formatTimeDisplay(input.startTime, timeFormat)}
+                  </Button>
+                }
+              >
+                <ScrollView style={styles.timeMenuScroll}>
+                  {START_TIME_OPTIONS.map((option) => (
+                    <Menu.Item
+                      key={option}
+                      onPress={() => onSelectStartTime(option)}
+                      title={formatTimeDisplay(option, timeFormat)}
+                    />
+                  ))}
+                </ScrollView>
+              </Menu>
+
+              <Menu
+                visible={endMenuVisible}
+                onDismiss={() => setEndMenuVisible(false)}
+                anchor={
+                  <Button mode="outlined" onPress={() => setEndMenuVisible(true)} style={styles.timeButton}>
+                    End: {formatTimeDisplay(input.endTime, timeFormat)}
+                  </Button>
+                }
+              >
+                <ScrollView style={styles.timeMenuScroll}>
+                  {END_TIME_OPTIONS.map((option) => (
+                    <Menu.Item
+                      key={option}
+                      onPress={() => onSelectEndTime(option)}
+                      title={formatTimeDisplay(option, timeFormat)}
+                    />
+                  ))}
+                </ScrollView>
+              </Menu>
+            </View>
+          </Card.Content>
+        </AppCard>
+
+        <AppCard>
+          <Card.Content style={styles.section}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
+              Preferences
+            </Text>
+
+            <View style={styles.fieldGroup}>
+              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
+                Group type
+              </Text>
+              <ChoiceButtonGroup
+                value={input.groupType}
+                onValueChange={(value) => updateInput({ groupType: value })}
+                options={GROUP_TYPE_OPTIONS}
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
+                Transport
+              </Text>
+              <SegmentedButtons
+                value={input.transport}
+                onValueChange={(value) => updateInput({ transport: value as TransportType })}
+                buttons={[
+                  { value: 'walk', label: 'Walk' },
+                  { value: 'drive', label: 'Drive' },
+                ]}
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
+                Budget
+              </Text>
+              <SegmentedButtons
+                value={input.budget}
+                onValueChange={(value) => updateInput({ budget: value as BudgetType })}
+                buttons={[
+                  { value: '$', label: '$' },
+                  { value: '$$', label: '$$' },
+                  { value: '$$$', label: '$$$' },
+                ]}
+              />
+            </View>
+          </Card.Content>
+        </AppCard>
+
+        <AppCard>
+          <Card.Content style={styles.section}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
+              Stops
+            </Text>
+
+            <View style={styles.switchRow}>
+              <Text style={{ color: theme.colors.onSurface }}>Feeling Lucky</Text>
+              <Switch
+                value={input.feelingLucky}
+                onValueChange={(value) => updateInput({ feelingLucky: value })}
+              />
+            </View>
+
+            {!input.feelingLucky ? (
+              <>
+                <View style={styles.chips}>
+                  {STOP_TYPE_OPTIONS.map((option) => (
+                    <Chip
+                      key={option.id}
+                      selected={input.preferences.interests.includes(option.id)}
+                      onPress={() => toggleInterest(option.id)}
+                    >
+                      {option.label}
+                    </Chip>
+                  ))}
+                </View>
+
+                {!hasSelectedStopTypes ? (
+                  <Text variant="bodySmall" style={[styles.emptyHint, { color: theme.colors.error }]}>
+                    Select at least one stop type or enable Feeling Lucky.
+                  </Text>
+                ) : null}
+              </>
+            ) : (
+              <Text variant="bodySmall" style={[styles.helperText, { color: theme.colors.onSurfaceVariant }]}>
+                Feeling Lucky will choose the stop types for you.
+              </Text>
+            )}
+
+            <View style={styles.fieldGroup}>
+              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
+                Number of stops
+              </Text>
+              <View style={styles.chips}>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
+                  <Chip
+                    key={count}
+                    selected={input.stopCount === count}
+                    onPress={() => updateInput({ stopCount: count })}
+                  >
+                    {count}
+                  </Chip>
+                ))}
+              </View>
+            </View>
+          </Card.Content>
+        </AppCard>
+
+        <AppCard>
+          <Card.Content style={styles.section}>
+            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
+              Trip settings
+            </Text>
+
+            <TextInput
+              label="Avoid list (comma separated)"
+              value={input.preferences.avoid.join(',')}
+              onChangeText={(value) =>
+                updatePreferences({
+                  avoid: value
                     .split(',')
-                    .map((x) => x.trim())
+                    .map((item) => item.trim())
                     .filter(Boolean),
-                },
-              })
-            }
-            mode="outlined"
-          />
-
-          <TextInput
-            label="Must include"
-            value={input.preferences.mustInclude}
-            onChangeText={(v) =>
-              setInput({
-                ...input,
-                preferences: { ...input.preferences, mustInclude: v },
-              })
-            }
-            mode="outlined"
-          />
-
-          <Text variant="titleSmall" style={styles.sectionTitle}>
-            Max travel time between stops
-          </Text>
-          <Text variant="bodySmall" style={styles.helperText}>
-            {sliderLabel}
-          </Text>
-
-          <View style={styles.sliderRow}>
-            <Text style={styles.sliderMin}>5</Text>
-            <Slider
-              style={{ flex: 1, height: 40 }}
-              minimumValue={5}
-              maximumValue={90}
-              step={5}
-              value={clamp(maxTravel, 5, 90)}
-              onValueChange={(v) => setMaxTravel(v)}
-              onSlidingComplete={(v) => {
-                const bounded = clamp(v, 5, 180);
-                setMaxTravel(bounded);
-                setInput((prev) => ({
-                  ...prev,
-                  preferences: {
-                    ...prev.preferences,
-                    maxTravelMinutes: bounded,
-                  },
-                }));
-              }}
-              minimumTrackTintColor={palette.primary}
-              maximumTrackTintColor={palette.muted}
-              thumbTintColor={palette.primary}
+                })
+              }
+              mode="outlined"
             />
-            <Text style={styles.sliderMax}>90</Text>
-          </View>
 
-          <View style={styles.switchRow}>
-            <Text>Accessible-friendly</Text>
-            <Switch
-              value={input.preferences.accessibleFriendly}
-              onValueChange={(v) => setInput({ ...input, preferences: { ...input.preferences, accessibleFriendly: v } })}
+            <TextInput
+              label="Must include"
+              value={input.preferences.mustInclude}
+              onChangeText={(value) => updatePreferences({ mustInclude: value })}
+              mode="outlined"
             />
-          </View>
 
-          <View style={styles.switchRow}>
-            <Text>Return to start</Text>
-            <Switch value={input.returnToStart} onValueChange={(v) => setInput({ ...input, returnToStart: v })} />
-          </View>
+            <View style={styles.fieldGroup}>
+              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
+                Max travel time between stops
+              </Text>
+              <Text variant="bodySmall" style={[styles.helperText, { color: theme.colors.onSurfaceVariant }]}>
+                {sliderLabel}
+              </Text>
 
-          <PrimaryButton
-            loading={loading}
-            disabled={loading || !input.city.trim() || (!input.feelingLucky && input.preferences.interests.length === 0)}
-            onPress={async () => {
-              const fresh = await location
-                .refreshLocation()
-                .catch(() => ({ coords: location.coords, placeLabel: location.placeLabel }));
+              <View style={styles.sliderRow}>
+                <Text style={[styles.sliderMin, { color: theme.colors.onSurfaceVariant }]}>
+                  {MIN_TRAVEL_MINUTES}
+                </Text>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={MIN_TRAVEL_MINUTES}
+                  maximumValue={MAX_TRAVEL_MINUTES}
+                  step={5}
+                  value={clamp(maxTravel, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES)}
+                  onValueChange={(value) => setMaxTravel(value)}
+                  onSlidingComplete={(value) => {
+                    const bounded = clamp(value, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES);
+                    setMaxTravel(bounded);
+                    updatePreferences({
+                      maxTravelMinutes: bounded,
+                    });
+                  }}
+                  minimumTrackTintColor={theme.colors.primary}
+                  maximumTrackTintColor={theme.colors.onSurfaceVariant}
+                  thumbTintColor={theme.colors.primary}
+                />
+                <Text style={[styles.sliderMax, { color: theme.colors.onSurfaceVariant }]}>
+                  {MAX_TRAVEL_MINUTES}
+                </Text>
+              </View>
+            </View>
 
-              const lat = fresh.coords?.latitude ?? input.startLat;
-              const lng = fresh.coords?.longitude ?? input.startLng;
-              const city = fresh.placeLabel || input.city;
+            <View style={styles.switchRow}>
+              <Text style={{ color: theme.colors.onSurface }}>Accessible-friendly</Text>
+              <Switch
+                value={input.preferences.accessibleFriendly}
+                onValueChange={(value) =>
+                  updatePreferences({
+                    accessibleFriendly: value,
+                  })
+                }
+              />
+            </View>
 
-              const payload: WizardInput = {
-                ...input,
-                city,
-                startLat: lat,
-                startLng: lng,
-                preferences: {
-                  ...input.preferences,
-                  maxTravelMinutes: clamp(maxTravel, 5, 180),
-                },
-              };
+            <View style={styles.switchRow}>
+              <Text style={{ color: theme.colors.onSurface }}>Return to start</Text>
+              <Switch
+                value={input.returnToStart}
+                onValueChange={(value) => updateInput({ returnToStart: value })}
+              />
+            </View>
+          </Card.Content>
+        </AppCard>
 
-              console.log('[plan] wizard_submit', {
-                city,
-                origin: { lat, lng },
-                stopCount: payload.stopCount,
-                selectedTypes: payload.preferences.interests,
-                maxTravelMinutes: payload.preferences.maxTravelMinutes,
-              });
+        <PrimaryButton loading={loading} disabled={isSubmitDisabled} onPress={handleGenerate}>
+          Generate Day Plan
+        </PrimaryButton>
 
-              const id = await createPlan(payload);
-              router.replace(`/generated/${id}`);
-            }}
-          >
-            Generate Day Plan
-          </PrimaryButton>
-
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        </Card.Content>
-      </AppCard>
+        {error ? <Text style={[styles.error, { color: theme.colors.error }]}>{error}</Text> : null}
+      </ScrollView>
     </AppScreen>
+    <GenerationLoadingOverlay visible={loading} progress={loadingProgress} />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
-    gap: spacing.md,
-    padding: spacing.md,
+  container: {
+    gap: spacing.lg,
+    paddingBottom: spacing.xxl,
   },
-  helperText: {
-    color: palette.muted,
-    marginTop: -spacing.xs,
+  section: {
+    gap: spacing.md,
+  },
+  fieldGroup: {
+    gap: spacing.sm,
+  },
+  fieldLabel: {
+    fontWeight: '600',
   },
   row: {
     flexDirection: 'row',
@@ -382,10 +552,6 @@ const styles = StyleSheet.create({
   },
   timeButton: {
     flex: 1,
-  },
-  timeButtonContent: {
-    justifyContent: 'flex-start',
-    height: 48,
   },
   timeMenuScroll: {
     maxHeight: 260,
@@ -395,37 +561,31 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
-  sectionTitle: {
-    color: palette.text,
-    fontWeight: '600',
-  },
   switchRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  errorText: {
-    color: palette.danger,
-    marginTop: spacing.xs,
-  },
-  emptyHint: {
-    color: palette.danger,
-    marginTop: -spacing.xs,
-  },
+  helperText: {},
+  emptyHint: {},
   sliderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginTop: spacing.xs,
+  },
+  slider: {
+    flex: 1,
+    height: 40,
   },
   sliderMin: {
     width: 22,
     textAlign: 'center',
-    color: palette.muted,
   },
   sliderMax: {
     width: 32,
     textAlign: 'center',
-    color: palette.muted,
+  },
+  error: {
+    textAlign: 'center',
   },
 });

@@ -1,6 +1,6 @@
 import { PlaceCandidate, Stop, StopType, WizardInput, GroupType, BudgetType } from '@/types/models';
 import { normalizeSelectedStopTypes } from '@/constants/stopTypes';
-import { RoutingProvider } from '@/providers/routingProvider';
+import { RouteLeg, RoutingProvider } from '@/providers/routingProvider';
 import {
   buildStopAllocation,
   enforceCapsAndAdjacency,
@@ -10,6 +10,7 @@ import {
   ScheduledStop,
 } from './itineraryEngine';
 import { evaluateCategoryCandidate } from '@/providers/categoryPolicy';
+import { getExplicitSelectedStopTypes, getSoloSuitabilityScore } from './soloSuitability';
 
 const DEFAULT_STOP_TYPE: StopType = 'restaurant';
 const ensureStopType = (value: StopType | undefined | null): StopType => value ?? DEFAULT_STOP_TYPE;
@@ -21,9 +22,28 @@ const parseMinutes = (time: string) => {
 
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-/**
- * Caps stops so short time windows never create impossible itineraries.
- */
+const deterministicShuffle = <T,>(items: T[], seed: string): T[] => {
+  const out = [...items];
+
+  const hash = (value: string) => {
+    let h = 0;
+    for (let i = 0; i < value.length; i += 1) {
+      h = (h << 5) - h + value.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h);
+  };
+
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = hash(`${seed}-${i}`) % (i + 1);
+    const tmp = out[i];
+    out[i] = out[j];
+    out[j] = tmp;
+  }
+
+  return out;
+};
+
 const capStopsForWindow = (windowMinutes: number, requested: number) => {
   let maxStops = 8;
   if (windowMinutes <= 60) maxStops = 2;
@@ -48,6 +68,7 @@ const matchCandidateForStop = (stop: Stop, candidates: PlaceCandidate[]) => {
 
 const toPlaceCandidateFromStop = (stop: Stop): PlaceCandidate => {
   const candidateId = stop.providerId || stop.id || `${stop.name}-${stop.lat}-${stop.lng}`;
+  const stopWithTags = stop as Stop & { tags?: string[] };
   return {
     id: candidateId,
     providerId: stop.providerId,
@@ -62,60 +83,87 @@ const toPlaceCandidateFromStop = (stop: Stop): PlaceCandidate => {
     reviewCount: stop.reviewCount,
     openingHoursText: stop.openingHoursText,
     priceLevel: stop.priceLevel,
-    tags: (stop as any).tags || [],
+    tags: Array.isArray(stopWithTags.tags) ? stopWithTags.tags : [],
+    photoUrl: stop.photoUrl,
+    photos: stop.photos || [],
     stopType: ensureStopType(stop.stopType),
   } as PlaceCandidate;
 };
 
-/**
- * If the user only selects restaurants, broaden slightly so the day isn't just 3 meals.
- */
-const enrichStopTypesIfOnlyRestaurants = (types: StopType[]) => {
-  const unique = Array.from(new Set(types));
-  if (unique.length === 1 && unique[0] === 'restaurant') {
-    return ['restaurant', 'activity', 'outdoors', 'coffee', 'dessert'] as StopType[];
-  }
-  return unique;
-};
-
+const normalizeStopTypes = (types: StopType[]) => Array.from(new Set(types));
 const uniqueStopTypes = (types: StopType[]) => Array.from(new Set(types));
 
-export const buildFeelingLuckyStopTypes = (input: WizardInput): StopType[] => {
-  const maxTravel = Math.max(5, Math.round(input.preferences.maxTravelMinutes || 30));
+const luckyBaseMixByGroup = (groupType: GroupType): StopType[] => {
+  if (groupType === 'Family') {
+    return ['activity', 'outdoors', 'attraction', 'dessert', 'restaurant', 'coffee', 'shopping'];
+  }
+  if (groupType === 'Solo') {
+    return ['coffee', 'activity', 'arts', 'outdoors', 'dessert', 'restaurant', 'shopping', 'attraction'];
+  }
+  if (groupType === 'Friends') {
+    return ['activity', 'restaurant', 'outdoors', 'bar', 'coffee', 'dessert', 'shopping', 'arts'];
+  }
+  return ['coffee', 'activity', 'restaurant', 'arts', 'dessert', 'outdoors', 'attraction', 'bar'];
+};
 
-  let mix: StopType[];
+const pickLuckySubset = (
+  pool: StopType[],
+  input: WizardInput,
+  desiredCount: number,
+  seed: string,
+): StopType[] => {
+  let filtered = uniqueStopTypes(pool);
+
   if (input.groupType === 'Family') {
-    mix = ['activity', 'outdoors', 'attraction', 'dessert', 'restaurant', 'coffee'];
-  } else if (input.groupType === 'Friends') {
-    mix = ['activity', 'restaurant', 'outdoors', 'bar', 'coffee', 'dessert'];
-  } else {
-    mix = ['coffee', 'activity', 'restaurant', 'arts', 'dessert', 'outdoors'];
+    filtered = filtered.filter((type) => type !== 'bar');
   }
 
   if (input.budget === '$') {
-    mix = mix.filter((type) => type !== 'bar' && type !== 'attraction');
+    filtered = filtered.filter((type) => type !== 'bar');
   } else if (input.budget === '$$$') {
-    mix = uniqueStopTypes([...mix, 'arts', 'attraction']);
+    filtered = uniqueStopTypes([...filtered, 'arts', 'attraction']);
   }
 
+  const maxTravel = Math.max(5, Math.round(input.preferences.maxTravelMinutes || 30));
   if (maxTravel <= 20) {
-    mix = mix.filter((type) => type !== 'attraction');
+    filtered = filtered.filter((type) => type !== 'attraction');
   }
 
   if (input.returnToStart) {
-    mix = uniqueStopTypes(['coffee', ...mix]);
+    filtered = uniqueStopTypes(['coffee', ...filtered]);
   }
 
-  if (input.groupType === 'Family') {
-    mix = mix.filter((type) => type !== 'bar');
+  if (filtered.length === 0) {
+    filtered = ['activity', 'restaurant', 'coffee'];
   }
 
-  return uniqueStopTypes(mix);
+  const shuffled = deterministicShuffle(filtered, seed);
+  const count = Math.max(3, Math.min(Math.max(desiredCount + 1, 4), shuffled.length));
+
+  return uniqueStopTypes(shuffled.slice(0, count));
 };
 
-/**
- * Removes stop types that don't make sense for the user's group type.
- */
+export const buildFeelingLuckyStopTypes = (input: WizardInput): StopType[] => {
+  const base = luckyBaseMixByGroup(input.groupType);
+  const desiredCount = Math.max(3, Math.min(6, Math.floor(input.stopCount || 3) + 1));
+
+  return pickLuckySubset(
+    base,
+    input,
+    desiredCount,
+    [
+      input.city,
+      input.date,
+      input.startTime,
+      input.endTime,
+      input.groupType,
+      input.budget,
+      String(input.returnToStart),
+      String(input.preferences.maxTravelMinutes || 30),
+    ].join('|'),
+  );
+};
+
 const applyGroupTypeStopTypeConstraints = (groupType: GroupType, types: StopType[]) => {
   const unique = Array.from(new Set(types));
 
@@ -129,7 +177,7 @@ const applyGroupTypeStopTypeConstraints = (groupType: GroupType, types: StopType
 const resolveSelectedStopTypes = (input: WizardInput) => {
   const selected = normalizeSelectedStopTypes(input.preferences.interests);
   if (selected.length > 0) {
-    return applyGroupTypeStopTypeConstraints(input.groupType, enrichStopTypesIfOnlyRestaurants(selected));
+    return applyGroupTypeStopTypeConstraints(input.groupType, normalizeStopTypes(selected));
   }
 
   if (input.feelingLucky) {
@@ -139,13 +187,13 @@ const resolveSelectedStopTypes = (input: WizardInput) => {
   return [] as StopType[];
 };
 
-/**
- * Limits restaurant frequency:
- * - If multiple categories are selected and restaurant is one of them -> max 1 restaurant
- * - If only restaurant is selected -> max 2 restaurants
- */
 const enforceRestaurantCap = (tokens: StopType[], selectedTypes: StopType[], groupType: GroupType) => {
   const uniqueSelected = new Set(selectedTypes);
+
+  if (uniqueSelected.size === 1) {
+    return tokens;
+  }
+
   const hasMultipleCategories = uniqueSelected.size > 1;
   const maxRestaurants = hasMultipleCategories ? 1 : 2;
 
@@ -186,9 +234,6 @@ const enforceRestaurantCap = (tokens: StopType[], selectedTypes: StopType[], gro
   return out;
 };
 
-/**
- * Produces a stable "brand key" so chain duplicates don't appear multiple times.
- */
 const brandKeyFromName = (name: string) => {
   const raw = (name || '').toLowerCase().trim();
   if (!raw) return '';
@@ -229,9 +274,6 @@ const buildDedupeKeys = (candidate: PlaceCandidate) => {
   return { idKey, pidKey, coordKey, brandKey };
 };
 
-/**
- * Sorts candidates by quality signals (rating, review count, then name).
- */
 const preferQualitySort = (a: PlaceCandidate, b: PlaceCandidate) => {
   const ar = typeof a.rating === 'number' ? a.rating : 0;
   const br = typeof b.rating === 'number' ? b.rating : 0;
@@ -247,20 +289,12 @@ const preferQualitySort = (a: PlaceCandidate, b: PlaceCandidate) => {
 const textBlob = (c: PlaceCandidate) =>
   `${c.name || ''} ${(c.category || '')} ${c.address || ''} ${(c.tags || []).join(' ')}`.toLowerCase();
 
-/**
- * Maps budget choice to an expected price level range.
- * priceLevel is typically 0–4 depending on provider.
- */
 const budgetBand = (budget: BudgetType) => {
   if (budget === '$') return { min: 0, max: 1, idealMin: 0, idealMax: 1 };
   if (budget === '$$') return { min: 1, max: 2, idealMin: 1, idealMax: 2 };
   return { min: 2, max: 4, idealMin: 2, idealMax: 3 };
 };
 
-/**
- * Returns a score based on how well a candidate matches the user's budget.
- * Missing priceLevel is treated as neutral so we don't throw away good candidates.
- */
 const scoreBudgetFit = (input: WizardInput, c: PlaceCandidate) => {
   const p = typeof c.priceLevel === 'number' ? c.priceLevel : undefined;
   if (p == null) return 0;
@@ -272,11 +306,12 @@ const scoreBudgetFit = (input: WizardInput, c: PlaceCandidate) => {
   return -4;
 };
 
-/**
- * Returns a score based on group type.
- * Family implies kid-friendly behavior.
- */
-const scoreGroupFit = (input: WizardInput, token: StopType, c: PlaceCandidate) => {
+const scoreGroupFit = (
+  input: WizardInput,
+  token: StopType,
+  c: PlaceCandidate,
+  explicitSelectedStopTypes: StopType[],
+) => {
   const blob = textBlob(c);
   const hasAny = (words: string[]) => words.some((w) => blob.includes(w));
 
@@ -304,35 +339,71 @@ const scoreGroupFit = (input: WizardInput, token: StopType, c: PlaceCandidate) =
     return score;
   }
 
-  // Friends
-  {
-    let score = 0;
-
-    if (token === 'activity' || token === 'bar') score += 3;
-    if (hasAny(['live', 'music', 'arcade', 'game', 'sports', 'brewery', 'pub', 'bar'])) score += 4;
-    if (hasAny(['playground'])) score -= 1;
-
-    return score;
+  if (input.groupType === 'Solo') {
+    const soloScore = getSoloSuitabilityScore(c, explicitSelectedStopTypes, input.groupType);
+    if (token === 'outdoors' || token === 'arts' || token === 'shopping') {
+      return soloScore + 1;
+    }
+    return soloScore;
   }
+
+  let score = 0;
+
+  if (token === 'activity' || token === 'bar') score += 3;
+  if (hasAny(['live', 'music', 'arcade', 'game', 'sports', 'brewery', 'pub', 'bar'])) score += 4;
+  if (hasAny(['playground'])) score -= 1;
+
+  return score;
 };
 
-/**
- * Combines preference signals into a single score.
- */
-const preferenceScore = (input: WizardInput, token: StopType, c: PlaceCandidate) => {
-  return scoreBudgetFit(input, c) + scoreGroupFit(input, token, c);
+const preferenceScore = (
+  input: WizardInput,
+  token: StopType,
+  c: PlaceCandidate,
+  explicitSelectedStopTypes: StopType[],
+) => {
+  return scoreBudgetFit(input, c) + scoreGroupFit(input, token, c, explicitSelectedStopTypes);
 };
 
-/**
- * Sorts candidates so user preferences are applied first, then quality breaks ties.
- */
 const preferInputAwareSort = (input: WizardInput, token: StopType) => {
+  const explicitSelectedStopTypes = getExplicitSelectedStopTypes(input.preferences.interests);
   return (a: PlaceCandidate, b: PlaceCandidate) => {
-    const sa = preferenceScore(input, token, a);
-    const sb = preferenceScore(input, token, b);
+    const sa = preferenceScore(input, token, a, explicitSelectedStopTypes);
+    const sb = preferenceScore(input, token, b, explicitSelectedStopTypes);
     if (sb !== sa) return sb - sa;
     return preferQualitySort(a, b);
   };
+};
+
+const buildOriginLeg = async (
+  routing: RoutingProvider,
+  input: WizardInput,
+  selected: PlaceCandidate[],
+): Promise<RouteLeg | undefined> => {
+  if (selected.length === 0) return undefined;
+  if (
+    typeof input.startLat !== 'number' ||
+    typeof input.startLng !== 'number' ||
+    !Number.isFinite(input.startLat) ||
+    !Number.isFinite(input.startLng)
+  ) {
+    return undefined;
+  }
+
+  const legs = await routing.route(
+    [
+      [input.startLat, input.startLng],
+      [selected[0].lat, selected[0].lng],
+    ],
+    input.transport,
+  );
+
+  return legs[0];
+};
+
+const trimPool = (pool: PlaceCandidate[], input: WizardInput) => {
+  const max = input.feelingLucky ? 24 : 14;
+  return pool.slice(0, Math.min(pool.length, max));
 };
 
 export const generateStops = async (
@@ -355,8 +426,10 @@ export const generateStops = async (
   const rawRequested = Math.max(1, Math.min(8, Math.floor(input.stopCount || 3)));
   const requestedCount = capStopsForWindow(totalMinutes, rawRequested);
 
-  const allocation = buildStopAllocation(selectedStopTypes, requestedCount);
-  let orderedTokens = enforceCapsAndAdjacency(orderAllocation(allocation, input.startTime, input.endTime));
+  const allocation = buildStopAllocation(selectedStopTypes, requestedCount, input.groupType);
+  let orderedTokens = enforceCapsAndAdjacency(
+    orderAllocation(allocation, input.startTime, input.endTime, input.groupType),
+  );
   orderedTokens = enforceRestaurantCap(orderedTokens, selectedStopTypes, input.groupType);
 
   const byType = new Map<StopType, PlaceCandidate[]>();
@@ -365,10 +438,6 @@ export const generateStops = async (
     const list = byType.get(t) || [];
     list.push({ ...candidate, stopType: t });
     byType.set(t, list);
-  }
-
-  for (const [t, list] of byType.entries()) {
-    byType.set(t, [...list].sort(preferInputAwareSort(input, t)));
   }
 
   const selected: PlaceCandidate[] = [];
@@ -397,8 +466,12 @@ export const generateStops = async (
     if (keys.brandKey) usedBrandKeys.add(keys.brandKey);
   };
 
-  orderedTokens.forEach((token, tokenIndex) => {
-    const typedPool = (byType.get(token) || []).filter((c) => !isBlocked(c));
+  for (let tokenIndex = 0; tokenIndex < orderedTokens.length; tokenIndex += 1) {
+    const token = orderedTokens[tokenIndex];
+
+    const typedPool = (byType.get(token) || [])
+      .filter((c) => !isBlocked(c))
+      .sort(preferInputAwareSort(input, token));
 
     const acceptedPool = typedPool.filter((c) => {
       const check = evaluateCategoryCandidate(token, {
@@ -409,32 +482,45 @@ export const generateStops = async (
       return check.accepted;
     });
 
-    const candidatePool = acceptedPool.length ? acceptedPool : typedPool;
+    const candidatePool = trimPool(acceptedPool.length ? acceptedPool : typedPool, input);
+
+    const fallbackPool = trimPool(
+      (byType.get(token) || [])
+        .filter((c) => !isBlocked(c))
+        .sort(preferInputAwareSort(input, token)),
+      input,
+    );
 
     const picked =
-      selectPlaceForToken({
+      (await selectPlaceForToken({
         token,
         tokenIndex,
-        seed: planId,
+        seed: `${planId}-generate`,
         candidates: candidatePool,
         selected,
         input,
-      }) ||
-      selectPlaceForToken({
+        routing,
+        selectionWindow: input.feelingLucky ? 14 : 8,
+        qualityFloorOffset: input.feelingLucky ? 10 : 7,
+      })) ||
+      (await selectPlaceForToken({
         token,
         tokenIndex,
         seed: `${planId}-fallback`,
-        candidates: (byType.get(token) || []).filter((c) => !isBlocked(c)).sort(preferInputAwareSort(input, token)),
+        candidates: fallbackPool,
         selected,
         input,
-      });
+        routing,
+        selectionWindow: input.feelingLucky ? 16 : 10,
+        qualityFloorOffset: input.feelingLucky ? 12 : 8,
+      }));
 
     if (picked) {
       markUsed(picked);
       selected.push({ ...picked, stopType: ensureStopType(picked.stopType) });
       selectedTokens.push(token);
     }
-  });
+  }
 
   for (let index = 0; index < selected.length; index += 1) {
     const tokenType = ensureStopType(selectedTokens[index] ?? selected[index]?.stopType);
@@ -449,34 +535,40 @@ export const generateStops = async (
 
     const currentKeys = buildDedupeKeys(current);
 
-    const replacementPool = (byType.get(tokenType) || [])
-      .filter((c) => {
-        if (c.id === current.id) return false;
-        if (current.providerId && c.providerId && c.providerId === current.providerId) return false;
-        if (isLikelyDuplicateBrand(c.name, current.name)) return false;
+    const replacementPool = trimPool(
+      (byType.get(tokenType) || [])
+        .filter((c) => {
+          if (c.id === current.id) return false;
+          if (current.providerId && c.providerId && c.providerId === current.providerId) return false;
+          if (isLikelyDuplicateBrand(c.name, current.name)) return false;
 
-        const k = buildDedupeKeys(c);
-        if (k.idKey && usedIdKeys.has(k.idKey) && k.idKey !== currentKeys.idKey) return false;
-        if (k.pidKey && usedProviderKeys.has(k.pidKey) && k.pidKey !== currentKeys.pidKey) return false;
-        if (k.coordKey && usedCoordKeys.has(k.coordKey) && k.coordKey !== currentKeys.coordKey) return false;
-        if (k.brandKey && usedBrandKeys.has(k.brandKey) && k.brandKey !== currentKeys.brandKey) return false;
+          const k = buildDedupeKeys(c);
+          if (k.idKey && usedIdKeys.has(k.idKey) && k.idKey !== currentKeys.idKey) return false;
+          if (k.pidKey && usedProviderKeys.has(k.pidKey) && k.pidKey !== currentKeys.pidKey) return false;
+          if (k.coordKey && usedCoordKeys.has(k.coordKey) && k.coordKey !== currentKeys.coordKey) return false;
+          if (k.brandKey && usedBrandKeys.has(k.brandKey) && k.brandKey !== currentKeys.brandKey) return false;
 
-        const check = evaluateCategoryCandidate(tokenType, {
-          name: c.name,
-          address: c.address,
-          types: c.tags,
-        });
-        return check.accepted;
-      })
-      .sort(preferInputAwareSort(input, tokenType));
+          const check = evaluateCategoryCandidate(tokenType, {
+            name: c.name,
+            address: c.address,
+            types: c.tags,
+          });
+          return check.accepted;
+        })
+        .sort(preferInputAwareSort(input, tokenType)),
+      input,
+    );
 
-    const replacement = selectPlaceForToken({
+    const replacement = await selectPlaceForToken({
       token: tokenType,
       tokenIndex: index,
       seed: `${planId}-validation`,
       candidates: replacementPool,
       selected: selected.slice(0, index),
       input,
+      routing,
+      selectionWindow: 10,
+      qualityFloorOffset: 8,
     });
 
     if (replacement) {
@@ -489,12 +581,21 @@ export const generateStops = async (
 
   const coords = selected.map((s) => [s.lat, s.lng] as [number, number]);
   const routeLegs = await routing.route(coords, input.transport);
+  const originLeg = await buildOriginLeg(routing, input, selected);
 
-  const scheduled: ScheduledStop[] = scheduleItinerary(selected, input, input.startTime, input.endTime);
+  const scheduled: ScheduledStop[] = scheduleItinerary(
+    selected,
+    input,
+    input.startTime,
+    input.endTime,
+    routeLegs,
+    originLeg,
+  );
 
   return scheduled.map((s, index) => {
-    const travel = index === 0 ? 0 : routeLegs[index - 1]?.etaMin || 10;
-    const distance = index === 0 ? 0 : routeLegs[index - 1]?.distanceKm || 1;
+    const leg = index === 0 ? originLeg : routeLegs[index - 1];
+    const travel = leg?.etaMin ?? 0;
+    const distance = leg?.distanceKm ?? 0;
 
     return {
       id: createId(),
@@ -524,13 +625,13 @@ export const generateStops = async (
 
       etaMin: travel,
       distanceKm: distance,
+
+      photoUrl: s.photoUrl,
+      photos: s.photos || [],
     };
   });
 };
 
-/**
- * Rerolls a single stop while keeping the SAME stopType and avoiding duplicates.
- */
 export const rerollStop = async (params: {
   planId: string;
   input: WizardInput;
@@ -590,10 +691,13 @@ export const rerollStop = async (params: {
     return false;
   };
 
-  const pool = validCandidates
-    .filter((c) => ensureStopType(c.stopType) === tokenType)
-    .filter((c) => !isBlocked(c))
-    .sort(preferInputAwareSort(input, tokenType));
+  const pool = trimPool(
+    validCandidates
+      .filter((c) => ensureStopType(c.stopType) === tokenType)
+      .filter((c) => !isBlocked(c))
+      .sort(preferInputAwareSort(input, tokenType)),
+    input,
+  );
 
   if (pool.length === 0) return currentStops;
 
@@ -614,16 +718,19 @@ export const rerollStop = async (params: {
   const selectedPrefix = orderedPlaces.slice(0, stopIndex);
 
   let replacement: PlaceCandidate | null = null;
-  for (let attempt = 0; attempt < 8 && !replacement; attempt += 1) {
+  for (let attempt = 0; attempt < 6 && !replacement; attempt += 1) {
     replacement =
-      selectPlaceForToken({
+      (await selectPlaceForToken({
         token: tokenType,
         tokenIndex: stopIndex + attempt,
         seed: `${seedBase}-${attempt}`,
         candidates: finalPool,
         selected: selectedPrefix,
         input,
-      }) || null;
+        routing,
+        selectionWindow: 14,
+        qualityFloorOffset: 10,
+      })) || null;
   }
 
   if (!replacement) return currentStops;
@@ -633,13 +740,22 @@ export const rerollStop = async (params: {
 
   const coords = nextPlaces.map((s) => [s.lat, s.lng] as [number, number]);
   const routeLegs = await routing.route(coords, input.transport);
+  const originLeg = await buildOriginLeg(routing, input, nextPlaces);
 
-  const scheduled: ScheduledStop[] = scheduleItinerary(nextPlaces, input, input.startTime, input.endTime);
+  const scheduled: ScheduledStop[] = scheduleItinerary(
+    nextPlaces,
+    input,
+    input.startTime,
+    input.endTime,
+    routeLegs,
+    originLeg,
+  );
 
   return scheduled.map((s, index) => {
     const prevStop = currentStops[index];
-    const travel = index === 0 ? 0 : routeLegs[index - 1]?.etaMin || 10;
-    const distance = index === 0 ? 0 : routeLegs[index - 1]?.distanceKm || 1;
+    const leg = index === 0 ? originLeg : routeLegs[index - 1];
+    const travel = leg?.etaMin ?? 0;
+    const distance = leg?.distanceKm ?? 0;
 
     return {
       id: prevStop?.id || createId(),
@@ -671,6 +787,9 @@ export const rerollStop = async (params: {
 
       etaMin: travel,
       distanceKm: distance,
+
+      photoUrl: s.photoUrl,
+      photos: s.photos || [],
     };
   });
 };

@@ -1,7 +1,18 @@
 import { PlaceCandidate, PlanPreferences } from '@/types/models';
 import { normalizeSelectedStopTypes } from '@/constants/stopTypes';
+import { GroupType, StopType } from '@/types/models';
+import { getSoloSuitabilityScore } from '@/services/soloSuitability';
 
-export const scorePlace = (place: PlaceCandidate, preferences: PlanPreferences): number => {
+interface ScorePlaceOptions {
+  groupType?: GroupType;
+  explicitSelectedStopTypes?: StopType[];
+}
+
+export const scorePlace = (
+  place: PlaceCandidate,
+  preferences: PlanPreferences,
+  options: ScorePlaceOptions = {},
+): number => {
   // Lightweight relevance scorer used by selection/ranking heuristics.
   let score = 0;
   const selectedTypes = normalizeSelectedStopTypes(preferences.interests);
@@ -14,5 +25,10 @@ export const scorePlace = (place: PlaceCandidate, preferences: PlanPreferences):
   if (preferences.accessibleFriendly && place.tags.some((t) => /accessible|wheelchair/i.test(t))) score += 2;
   if (preferences.avoid.some((a) => place.name.toLowerCase().includes(a.toLowerCase()))) score -= 4;
   if (preferences.mustInclude && place.name.toLowerCase().includes(preferences.mustInclude.toLowerCase())) score += 3;
+  score += getSoloSuitabilityScore(
+    place,
+    options.explicitSelectedStopTypes ?? selectedTypes,
+    options.groupType,
+  );
   return score;
 };

@@ -1,22 +1,24 @@
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlatList, StyleSheet, View } from 'react-native';
-import { Card, SegmentedButtons, Text, TextInput } from 'react-native-paper';
-import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
+import { Card, Text, TextInput } from 'react-native-paper';
+import { AppCard, AppScreen, ChoiceButtonGroup, PrimaryButton, SecondaryButton } from '@/components/ui';
+import { GROUP_FILTER_OPTIONS } from '@/constants/groupTypes';
 import { usePlanStore } from '@/store/usePlanStore';
+import { GroupType } from '@/types/models';
 import { palette, spacing } from '@/theme/appTheme';
 
 export default function SavedPlans() {
   const plans = usePlanStore((s) => s.plans);
   const [q, setQ] = useState('');
-  const [group, setGroup] = useState('all');
+  const [group, setGroup] = useState<'all' | GroupType>('all');
   // Local filter keeps list interactions instant without extra fetches.
   const filtered = useMemo(() => plans.filter((p) => (group === 'all' || p.groupType === group) && `${p.city} ${p.date}`.toLowerCase().includes(q.toLowerCase())), [plans, q, group]);
 
   return (
     <AppScreen title="Saved Plans" scroll={false}>
       <TextInput mode="outlined" label="Search city/date" value={q} onChangeText={setQ} />
-      <SegmentedButtons value={group} onValueChange={setGroup} buttons={[{ value: 'all', label: 'All' }, { value: 'Date', label: 'Date' }, { value: 'Family', label: 'Family' }, { value: 'Friends', label: 'Friends' }]} />
+      <ChoiceButtonGroup value={group} onValueChange={setGroup} options={GROUP_FILTER_OPTIONS} />
       {filtered.length === 0 ? (
         <View style={styles.emptyState}>
           <Text variant="titleMedium" style={styles.emptyTitle}>No plans found</Text>

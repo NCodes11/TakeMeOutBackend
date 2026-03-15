@@ -1,98 +1,315 @@
-import { useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
-import { Card, Checkbox, Text, TextInput } from 'react-native-paper';
+import { RouteMap } from '@/components/RouteMap';
+import { StopCard } from '@/components/StopCard';
+import { FeedbackModal } from '@/components/FeedbackModal';
+import { PlaceInfoModal } from '@/components/PlaceInfoModal';
+import { GenerationLoadingOverlay } from '@/components/GenerationLoadingOverlay';
 import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
-import { useTimeFormat } from '@/context/PreferencesContext';
 import { usePlanStore } from '@/store/usePlanStore';
-import * as Crypto from 'expo-crypto';
-import { getChecklist, saveChecklist } from '@/db/sqlite';
-import { palette, spacing } from '@/theme/appTheme';
-import { formatTimeDisplay } from '@/utils/time';
+import { router, useLocalSearchParams } from 'expo-router';
+import { Alert, Linking, Share, StyleSheet, View } from 'react-native';
+import { Card, SegmentedButtons, Text, useTheme } from 'react-native-paper';
+import { useMemo, useState } from 'react';
+import { spacing } from '@/theme/appTheme';
+import { buildGoogleMapsPinUrl, hasValidCoords } from '@/utils/maps';
+import { WizardInput, Stop } from '@/types/models';
 
-export default function PlanDetailScreen() {
+const isViewMode = (value: string): value is 'timeline' | 'list' =>
+  value === 'timeline' || value === 'list';
+
+export default function GeneratedPlanScreen() {
+  const theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const timeFormat = useTimeFormat();
-  const stops = usePlanStore((s) => s.stopsByPlan[id] || []);
-  const reorder = usePlanStore((s) => s.reorderStops);
-  const [items, setItems] = useState(getChecklist(id));
-  const [newItem, setNewItem] = useState('');
+  const planId = typeof id === 'string' ? id : '';
+
+  const plans = usePlanStore((s) => s.plans);
+  const stops = usePlanStore((s) => s.stopsByPlan[planId] || []);
+  const routeLegs = usePlanStore((s) => s.routeLegsByPlan[planId] || []);
+  const warning = usePlanStore((s) => s.warning);
+  const error = usePlanStore((s) => s.error);
+  const loading = usePlanStore((s) => s.loading);
+  const loadingProgress = usePlanStore((s) => s.loadingProgress);
+
+  const rerollStop = usePlanStore((s) => s.rerollStop);
+  const rerollingByPlan = usePlanStore((s) => s.rerollingByPlan);
+
+  const [view, setView] = useState<'timeline' | 'list'>('timeline');
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [selectedStop, setSelectedStop] = useState<Stop | null>(null);
+  const [placeInfoVisible, setPlaceInfoVisible] = useState(false);
+
+  const plan = plans.find((p) => p.id === planId);
+  const orderedStops = [...stops].sort((a, b) => a.order - b.order);
+
+  const handleOpenPlaceInfo = (stop: Stop) => {
+    setSelectedStop(stop);
+    setPlaceInfoVisible(true);
+  };
+
+  const handleClosePlaceInfo = () => {
+    setPlaceInfoVisible(false);
+    setSelectedStop(null);
+  };
+
+  const derivedInput: WizardInput | null = useMemo(() => {
+    if (!plan) return null;
+
+    let preferences: Record<string, unknown> = {};
+    try {
+      preferences = plan.preferencesJSON ? JSON.parse(plan.preferencesJSON) : {};
+    } catch {
+      preferences = {};
+    }
+
+    return {
+      city: plan.city,
+      date: plan.date,
+      startTime: plan.startTime,
+      endTime: plan.endTime,
+      groupType: plan.groupType,
+      transport: plan.transport,
+      budget: plan.budget,
+      feelingLucky: Boolean(preferences?.feelingLucky),
+      returnToStart: plan.returnToStart,
+
+      startLat: plan.startLat,
+      startLng: plan.startLng,
+
+      stopCount:
+        typeof preferences?.stopCount === 'number'
+          ? preferences.stopCount
+          : orderedStops.length,
+
+      adults: typeof preferences?.adults === 'number' ? preferences.adults : 2,
+      kids: typeof preferences?.kids === 'number' ? preferences.kids : 0,
+      kidAges: Array.isArray(preferences?.kidAges) ? preferences.kidAges : [],
+
+      startLocationMode:
+        typeof preferences?.startLocationMode === 'string'
+          ? preferences.startLocationMode
+          : 'my-location',
+      startAddress:
+        typeof preferences?.startAddress === 'string'
+          ? preferences.startAddress
+          : '',
+
+      preferences: {
+        interests: Array.isArray(preferences?.interests) ? preferences.interests : [],
+        avoid: Array.isArray(preferences?.avoid) ? preferences.avoid : [],
+        mustInclude: typeof preferences?.mustInclude === 'string' ? preferences.mustInclude : '',
+        maxTravelMinutes:
+          typeof preferences?.maxTravelMinutes === 'number'
+            ? preferences.maxTravelMinutes
+            : undefined,
+        accessibleFriendly: Boolean(preferences?.accessibleFriendly),
+      },
+    } as WizardInput;
+  }, [plan, orderedStops.length]);
+
+  if (!plan) return <Text>Plan not found</Text>;
+
+  const handleReroll = (stopOrder: number, rerolling: boolean) => {
+    if (rerolling) return;
+    if (!derivedInput) return;
+
+    void rerollStop(planId, derivedInput, stopOrder).catch((e) => {
+      const message =
+        e instanceof Error ? e.message : 'Unable to reroll. Please try again.';
+      Alert.alert('Reroll failed', message);
+    });
+  };
+
+  const handleSharePlan = async () => {
+    const stopLines = orderedStops
+      .map((stop, index) => `${index + 1}. ${stop.name}`)
+      .join('\n');
+
+    const message = [
+      `Check out this Take Me Out plan for ${plan.city} on ${plan.date}.`,
+      '',
+      stopLines || 'No stops added yet.',
+    ].join('\n');
+
+    try {
+      await Share.share({
+        title: `Take Me Out plan for ${plan.city}`,
+        message,
+      });
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : 'Unable to share this plan right now.';
+      Alert.alert('Share failed', message);
+    }
+  };
 
   return (
-    <AppScreen title="Plan Detail">
-      <AppCard>
-        <Card.Content style={styles.content}>
-      {/* Stop order controls write back through the store so generated/today views stay in sync. */}
-      <Text variant="titleLarge">Reorder Stops</Text>
-      {stops.map((s, i) => (
-        <View key={s.id} style={styles.stopRow}>
-          <Text>
-            {i + 1}. {s.name} ({formatTimeDisplay(s.startTime, timeFormat)}-{formatTimeDisplay(s.endTime, timeFormat)})
+    <>
+    <AppScreen>
+      <Text variant="headlineSmall" style={[styles.topTitle, { color: theme.colors.onSurface }]}>
+        {plan.city} · {plan.date}
+      </Text>
+
+      <SegmentedButtons
+        value={view}
+        onValueChange={(v) => {
+          if (isViewMode(v)) setView(v);
+        }}
+        buttons={[
+          { value: 'timeline', label: 'Timeline' },
+          { value: 'list', label: 'List' },
+        ]}
+      />
+
+      <RouteMap stops={orderedStops} routeLegs={routeLegs} />
+
+      {warning ? (
+        <View
+          style={[
+            styles.warningState,
+            {
+              borderColor: theme.colors.secondary,
+              backgroundColor: theme.colors.secondaryContainer,
+            },
+          ]}
+        >
+          <Text variant="bodySmall" style={{ color: theme.colors.onSecondaryContainer }}>
+            {warning}
           </Text>
-          <View style={styles.stopActions}>
-            <SecondaryButton compact disabled={i === 0} onPress={() => reorder(id, i, i - 1)}>↑</SecondaryButton>
-            <SecondaryButton compact disabled={i === stops.length - 1} onPress={() => reorder(id, i, i + 1)}>↓</SecondaryButton>
-          </View>
         </View>
-      ))}
+      ) : null}
 
-      <Text variant="titleMedium">Packing checklist</Text>
-      <SecondaryButton onPress={() => {
-        // Quick starter checklist for family-oriented trips.
-        const familyKit = ['Snacks', 'Water', 'Portable charger', 'Wipes', 'First-aid'];
-        const next = [...items, ...familyKit.map((t) => ({ id: Crypto.randomUUID(), planId: id, text: t, done: 0 }))];
-        setItems(next);
-        saveChecklist(next);
-      }}>Add family essentials</SecondaryButton>
+      {error ? (
+        <View
+          style={[
+            styles.errorState,
+            {
+              borderColor: theme.colors.error,
+              backgroundColor: theme.colors.errorContainer,
+            },
+          ]}
+        >
+          <Text variant="bodySmall" style={{ color: theme.colors.onErrorContainer }}>
+            {error}
+          </Text>
+        </View>
+      ) : null}
 
-      <ScrollView style={styles.list}>
-        {items.map((item) => (
-          <Checkbox.Item
-            key={item.id}
-            label={item.text}
-            status={item.done ? 'checked' : 'unchecked'}
-            onPress={() => {
-              const next = items.map((x) => (x.id === item.id ? { ...x, done: x.done ? 0 : 1 } : x));
-              setItems(next);
-              saveChecklist(next);
-            }}
-          />
-        ))}
-      </ScrollView>
-      <TextInput label="Add checklist item" value={newItem} onChangeText={setNewItem} mode="outlined" />
-      <PrimaryButton onPress={() => {
-        if (!newItem.trim()) return;
-        const next = [...items, { id: Crypto.randomUUID(), planId: id, text: newItem.trim(), done: 0 }];
-        setItems(next);
-        saveChecklist(next);
-        setNewItem('');
-      }}>Add</PrimaryButton>
-      </Card.Content>
-      </AppCard>
+      {view === 'timeline'
+        ? orderedStops.map((s) => {
+            const rerolling = Boolean(rerollingByPlan[planId]?.[s.order]);
+
+            return (
+              <StopCard
+                key={s.id}
+                stop={s}
+                rerolling={rerolling}
+                onPressInfo={handleOpenPlaceInfo}
+                onReroll={() => handleReroll(s.order, rerolling)}
+                onOpenMap={async () => {
+                  if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
+                    Alert.alert(
+                      'Missing location data',
+                      'This stop is missing coordinates. Regenerate your plan to refresh place details.',
+                    );
+                    return;
+                  }
+                  const url = buildGoogleMapsPinUrl({ lat: s.lat, lng: s.lng });
+                  await Linking.openURL(url);
+                }}
+              />
+            );
+          })
+        : orderedStops.map((s, index) => {
+            const rerolling = Boolean(rerollingByPlan[planId]?.[s.order]);
+
+            return (
+              <AppCard key={s.id}>
+                <Card.Content style={styles.listCardContent}>
+                  <Text
+                    variant="titleMedium"
+                    style={[styles.listCardTitle, { color: theme.colors.onSurface }]}
+                    onPress={() => handleOpenPlaceInfo(s)}
+                  >
+                    {index + 1}. {s.name}
+                  </Text>
+
+                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                    {s.category} · {s.address}
+                  </Text>
+                </Card.Content>
+
+                <Card.Actions>
+                  <SecondaryButton onPress={() => handleOpenPlaceInfo(s)}>
+                    Place Info
+                  </SecondaryButton>
+
+                  <SecondaryButton
+                    disabled={rerolling}
+                    loading={rerolling}
+                    onPress={() => handleReroll(s.order, rerolling)}
+                  >
+                    {rerolling ? 'Finding…' : 'Reroll'}
+                  </SecondaryButton>
+                </Card.Actions>
+              </AppCard>
+            );
+          })}
+
+      <View style={styles.actions}>
+        <SecondaryButton onPress={handleSharePlan}>Share Plan</SecondaryButton>
+      </View>
+
+      <PrimaryButton onPress={() => setFeedbackVisible(true)}>
+        Finish Day
+      </PrimaryButton>
+
+      <FeedbackModal
+        visible={feedbackVisible}
+        plan={plan}
+        stops={orderedStops}
+        onDismiss={() => setFeedbackVisible(false)}
+        onSubmitted={() => {
+          setFeedbackVisible(false);
+          router.push('/');
+        }}
+      />
+
+      <PlaceInfoModal
+        visible={placeInfoVisible}
+        stop={selectedStop}
+        onDismiss={handleClosePlaceInfo}
+      />
     </AppScreen>
+    <GenerationLoadingOverlay visible={loading} progress={loadingProgress} />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
-    gap: spacing.md,
-    padding: spacing.md,
+  topTitle: {
+    fontWeight: '700',
+    marginBottom: spacing.xs,
+    textAlign: 'center',
+    width: '100%',
   },
-  stopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
-    alignItems: 'center',
+  listCardTitle: {
+    textDecorationLine: 'underline',
   },
-  stopActions: {
-    flexDirection: 'row',
+  listCardContent: {
     gap: spacing.xs,
   },
-  list: {
-    maxHeight: 280,
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  warningState: {
     borderWidth: 1,
-    borderColor: palette.border,
     borderRadius: 12,
-    backgroundColor: palette.surface,
+    padding: spacing.sm,
+  },
+  errorState: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: spacing.sm,
   },
 });

@@ -1,4 +1,4 @@
-export type GroupType = 'Date' | 'Family' | 'Friends';
+export type GroupType = 'Date' | 'Solo' | 'Family' | 'Friends';
 export type TransportType = 'walk' | 'drive';
 export type BudgetType = '$' | '$$' | '$$$';
 
@@ -18,6 +18,7 @@ export interface PlanPreferences {
   avoid: string[];
   mustInclude: string;
   maxTravelMinutes?: number;
+  kidFriendly?: boolean;
   accessibleFriendly: boolean;
 }
 
@@ -38,6 +39,14 @@ export interface Plan {
   /** Origin used for place search and rerolls (enables Google Places nearby search). */
   startLat?: number;
   startLng?: number;
+}
+
+export interface PlacePhoto {
+  name?: string;
+  url: string;
+  widthPx?: number;
+  heightPx?: number;
+  authorAttributions?: string[];
 }
 
 export interface Stop {
@@ -68,6 +77,22 @@ export interface Stop {
   stopType?: StopType;
   providerId?: string;
   reviewCount?: number;
+
+  websiteUri?: string;
+  nationalPhoneNumber?: string;
+  googleMapsUri?: string;
+  editorialSummary?: string;
+
+  /**
+   * Convenience hero image for cards.
+   * Usually the first item from `photos`.
+   */
+  photoUrl?: string;
+
+  /**
+   * Rich photo gallery for premium UI.
+   */
+  photos?: PlacePhoto[];
 }
 
 export interface ChecklistItem {
@@ -131,6 +156,22 @@ export interface PlaceCandidate {
   reviewCount?: number;
   openingHoursText?: string;
   priceLevel?: number;
+
+  websiteUri?: string;
+  nationalPhoneNumber?: string;
+  googleMapsUri?: string;
+  editorialSummary?: string;
+
+  /**
+   * Convenience hero image for cards.
+   * Usually the first item from `photos`.
+   */
+  photoUrl?: string;
+
+  /**
+   * Rich photo gallery returned by providers.
+   */
+  photos?: PlacePhoto[];
 
   tags: string[];
   stopType: StopType;

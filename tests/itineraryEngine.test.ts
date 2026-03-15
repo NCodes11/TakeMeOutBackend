@@ -30,4 +30,17 @@ describe('itinerary engine', () => {
     const fixed = enforceCapsAndAdjacency(['coffee', 'coffee', 'shopping', 'outdoors']);
     expect(fixed[0] === 'coffee' && fixed[1] === 'coffee').toBe(false);
   });
+
+  it('prefers lower-pressure repeats in solo mode while preserving selected categories', () => {
+    const allocation = buildStopAllocation(['coffee', 'bar'], 4, 'Solo');
+    expect(allocation.filter((token) => token === 'bar')).toHaveLength(1);
+    expect(allocation.filter((token) => token === 'coffee').length).toBeGreaterThan(1);
+  });
+
+  it('orders solo itineraries from lighter stops toward relaxing later stops', () => {
+    const ordered = orderAllocation(['restaurant', 'outdoors', 'coffee', 'dessert'], '09:00', '18:00', 'Solo');
+    expect(ordered[0]).toBe('coffee');
+    expect(ordered.indexOf('outdoors')).toBeLessThan(ordered.indexOf('restaurant'));
+    expect(ordered[ordered.length - 1]).toBe('dessert');
+  });
 });

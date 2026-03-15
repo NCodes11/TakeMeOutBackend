@@ -1,5 +1,12 @@
-import { PlaceCandidate, StopType, TransportType, WizardInput } from '@/types/models';
+import { PlaceCandidate, StopType, TransportType, WizardInput, GroupType } from '@/types/models';
+import { RouteLeg, RoutingProvider } from '@/providers/routingProvider';
 import { budgetScoreAdjustment, resolvePlaceTier } from '@/utils/priceTier';
+import {
+  getExplicitSelectedStopTypes,
+  getSoloPreferredPosition,
+  getSoloSuitabilityScore,
+  SOLO_STOP_TYPE_RULE_OVERRIDES,
+} from './soloSuitability';
 
 type Minutes = number;
 
@@ -25,6 +32,16 @@ const TYPE_RULES: Record<StopType, StopTypeRule> = {
   outdoors: { maxDefault: 1, repeatWeight: 3, importance: 5 },
   shopping: { maxDefault: Number.POSITIVE_INFINITY, repeatWeight: 5, importance: 4 },
   arts: { maxDefault: 1, repeatWeight: 4, importance: 5 },
+};
+
+const getTypeRule = (type: StopType, groupType: GroupType = 'Date'): StopTypeRule => {
+  const base = TYPE_RULES[type];
+  if (groupType !== 'Solo') return base;
+
+  return {
+    ...base,
+    ...SOLO_STOP_TYPE_RULE_OVERRIDES[type],
+  };
 };
 
 const NO_REPEAT_ADJACENT = new Set<StopType>([
@@ -86,26 +103,32 @@ const deterministicIndex = (seed: string, size: number) => {
 };
 
 /**
- * Distributes stop types across the requested stop count while respecting per-type defaults.
+ * Allocates stop types across the requested number of slots using importance
+ * and repeat weights so the itinerary has a balanced structure.
  */
-export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: number): StopType[] => {
+export const buildStopAllocation = (
+  selectedTypes: StopType[],
+  numberOfStops: number,
+  groupType: GroupType = 'Date',
+): StopType[] => {
   const uniqueTypes = Array.from(new Set(selectedTypes));
   const target = Math.max(1, numberOfStops);
 
   if (uniqueTypes.length === 0) return [];
   if (uniqueTypes.length === 1) return Array.from({ length: target }, () => uniqueTypes[0]);
 
-  const sortedByImportance = [...uniqueTypes].sort((a, b) => TYPE_RULES[b].importance - TYPE_RULES[a].importance);
+  const sortedByImportance = [...uniqueTypes].sort(
+    (a, b) => getTypeRule(b, groupType).importance - getTypeRule(a, groupType).importance,
+  );
 
   const selected = target < uniqueTypes.length ? sortedByImportance.slice(0, target) : sortedByImportance;
   const counts = new Map<StopType, number>(selected.map((type) => [type, 1]));
   const allocation = [...selected];
 
-  // First pass: fill remaining slots without violating default per-type caps.
   while (allocation.length < target) {
     const expandable = selected
-      .filter((type) => (counts.get(type) || 0) < TYPE_RULES[type].maxDefault)
-      .sort((a, b) => TYPE_RULES[b].repeatWeight - TYPE_RULES[a].repeatWeight);
+      .filter((type) => (counts.get(type) || 0) < getTypeRule(type, groupType).maxDefault)
+      .sort((a, b) => getTypeRule(b, groupType).repeatWeight - getTypeRule(a, groupType).repeatWeight);
 
     if (expandable.length === 0) break;
 
@@ -114,9 +137,10 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
     counts.set(next, (counts.get(next) || 0) + 1);
   }
 
-  // Second pass: if still short, allow repeats by repeatWeight priority.
   while (allocation.length < target) {
-    const sortedByRepeat = [...selected].sort((a, b) => TYPE_RULES[b].repeatWeight - TYPE_RULES[a].repeatWeight);
+    const sortedByRepeat = [...selected].sort(
+      (a, b) => getTypeRule(b, groupType).repeatWeight - getTypeRule(a, groupType).repeatWeight,
+    );
     const next = sortedByRepeat[0];
     allocation.push(next);
     counts.set(next, (counts.get(next) || 0) + 1);
@@ -126,9 +150,15 @@ export const buildStopAllocation = (selectedTypes: StopType[], numberOfStops: nu
 };
 
 /**
- * Orders stop types into a rough "day shape" (coffee early, bar late, etc).
+ * Orders the chosen stop types through the day so early, middle, and late slots
+ * tend to match how people usually use those categories.
  */
-export const orderAllocation = (allocationTokens: StopType[], startTime: string, endTime: string): StopType[] => {
+export const orderAllocation = (
+  allocationTokens: StopType[],
+  startTime: string,
+  endTime: string,
+  groupType: GroupType = 'Date',
+): StopType[] => {
   const tokens = [...allocationTokens];
   if (tokens.length <= 1) return tokens;
 
@@ -138,6 +168,9 @@ export const orderAllocation = (allocationTokens: StopType[], startTime: string,
   const startsLate = start >= 12 * 60;
 
   const preferredPosition = (type: StopType) => {
+    if (groupType === 'Solo') {
+      return getSoloPreferredPosition(type, total, startsLate);
+    }
     if (type === 'coffee') return 0;
     if (type === 'restaurant') return Math.floor(total * 0.5);
     if (type === 'bar') return total - 1;
@@ -154,7 +187,8 @@ export const orderAllocation = (allocationTokens: StopType[], startTime: string,
 };
 
 /**
- * Avoids placing the same "no-repeat-adjacent" type back-to-back when there are alternatives.
+ * Prevents certain stop categories from appearing back-to-back when another
+ * category is available later in the sequence.
  */
 export const enforceCapsAndAdjacency = (tokens: StopType[]): StopType[] => {
   if (tokens.length <= 1) return tokens;
@@ -188,70 +222,210 @@ interface SelectionContext {
   candidates: PlaceCandidate[];
   selected: PlaceCandidate[];
   input: WizardInput;
+  routing: RoutingProvider;
+  selectionWindow?: number;
+  qualityFloorOffset?: number;
+}
+
+const hasOrigin = (input: WizardInput) =>
+  typeof input.startLat === 'number' &&
+  typeof input.startLng === 'number' &&
+  Number.isFinite(input.startLat) &&
+  Number.isFinite(input.startLng);
+
+const estimateFallbackEtaMinutes = (
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  transport: TransportType,
+) => {
+  const dist = haversineKm(from.lat, from.lng, to.lat, to.lng);
+  return Math.max(1, Math.round((dist / estimatedSpeedKmh(transport)) * 60));
+};
+
+const buildLegCacheKey = (
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  transport: TransportType,
+) => `${transport}:${from.lat.toFixed(5)},${from.lng.toFixed(5)}->${to.lat.toFixed(5)},${to.lng.toFixed(5)}`;
+
+const routeEtaCache = new Map<string, number>();
+
+/**
+ * Resolves travel time between two points. Routing results are cached by leg so
+ * the selection step can reuse them while scoring candidate pools.
+ */
+const getLegEtaMinutes = async (
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  transport: TransportType,
+  routing: RoutingProvider,
+) => {
+  const cacheKey = buildLegCacheKey(from, to, transport);
+  const cached = routeEtaCache.get(cacheKey);
+  if (typeof cached === 'number') return cached;
+
+  try {
+    const legs = await routing.route(
+      [
+        [from.lat, from.lng],
+        [to.lat, to.lng],
+      ],
+      transport,
+    );
+    const eta = legs[0]?.etaMin;
+    if (typeof eta === 'number' && Number.isFinite(eta)) {
+      routeEtaCache.set(cacheKey, eta);
+      return eta;
+    }
+  } catch {
+    // Fall back to straight-line travel estimates when routing is unavailable.
+  }
+
+  const fallback = estimateFallbackEtaMinutes(from, to, transport);
+  routeEtaCache.set(cacheKey, fallback);
+  return fallback;
+};
+
+interface RankedCandidate {
+  candidate: PlaceCandidate;
+  score: number;
+  estimatedEta?: number;
 }
 
 /**
- * Scores candidates and deterministically selects one from the top few.
- * To avoid "no results" due to travel-time strictness, candidates beyond maxTravel
- * are penalized heavily instead of being discarded entirely.
+ * Scores candidates in two stages:
+ * 1. cheap synchronous pre-ranking using estimated ETA
+ * 2. exact routing only for the best few candidates
+ *
+ * This keeps results similar while avoiding route lookups for every candidate.
  */
-export const selectPlaceForToken = ({
+export const selectPlaceForToken = async ({
   token,
   tokenIndex,
   seed,
   candidates,
   selected,
   input,
-}: SelectionContext): PlaceCandidate | null => {
+  routing,
+  selectionWindow = 12,
+  qualityFloorOffset = 8,
+}: SelectionContext): Promise<PlaceCandidate | null> => {
   if (candidates.length === 0) return null;
 
-  const prev = selected[selected.length - 1];
   const maxTravel = Math.max(5, input.preferences.maxTravelMinutes || 30);
+  const explicitSelectedStopTypes = getExplicitSelectedStopTypes(input.preferences.interests);
+  const previous = selected[selected.length - 1];
 
-  const ranked = candidates
-    .map((candidate) => {
+  const from = previous
+    ? { lat: previous.lat, lng: previous.lng }
+    : hasOrigin(input)
+      ? { lat: input.startLat as number, lng: input.startLng as number }
+      : null;
+
+  const cheapRanked: RankedCandidate[] = [];
+
+  for (const candidate of candidates) {
+    let score = 10;
+
+    score += candidate.stopType === token ? 8 : -12;
+    score += (candidate.rating || 0) * 1.5;
+    score += Math.min(3, (candidate.reviewCount || 0) / 500);
+
+    const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
+    const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
+    if (budgetScore <= -900) continue;
+    score += budgetScore;
+    score += getSoloSuitabilityScore(candidate, explicitSelectedStopTypes, input.groupType);
+
+    if (candidate.openNow) score += 2;
+
+    let estimatedEta: number | undefined;
+
+    if (from) {
+      estimatedEta = estimateFallbackEtaMinutes(from, { lat: candidate.lat, lng: candidate.lng }, input.transport);
+
+      // Slightly relaxed early cutoff so we do not over-prune before exact routing.
+      if (estimatedEta > maxTravel + 12) {
+        continue;
+      }
+
+      score += Math.max(0, 4 - estimatedEta / 8);
+
+      if (input.transport === 'walk') {
+        score += Math.max(0, 6 - estimatedEta / 4);
+      } else {
+        score += Math.max(0, 2 - estimatedEta / 15);
+      }
+    }
+
+    cheapRanked.push({ candidate, score, estimatedEta });
+  }
+
+  if (cheapRanked.length === 0) return null;
+
+  cheapRanked.sort((a, b) => b.score - a.score);
+
+  const routingPoolSize = Math.min(
+    cheapRanked.length,
+    Math.max(selectionWindow * 2, input.feelingLucky ? 20 : 14),
+  );
+
+  const preselected = cheapRanked.slice(0, routingPoolSize);
+
+  const exactRanked = await Promise.all(
+    preselected.map(async (entry) => {
+      const candidate = entry.candidate;
       let score = 10;
 
-      // Strong preference for matching token stopType (should already match in generator).
       score += candidate.stopType === token ? 8 : -12;
-
-      // Quality signals.
       score += (candidate.rating || 0) * 1.5;
       score += Math.min(3, (candidate.reviewCount || 0) / 500);
 
-      // Budget fit.
       const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
       const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
       if (budgetScore <= -900) return { candidate, score: -999 };
       score += budgetScore;
+      score += getSoloSuitabilityScore(candidate, explicitSelectedStopTypes, input.groupType);
 
-      // Slight bonus when open now (if known).
       if (candidate.openNow) score += 2;
 
-      // Travel feasibility from previous stop.
-      if (prev) {
-        const dist = haversineKm(prev.lat, prev.lng, candidate.lat, candidate.lng);
-        const eta = (dist / estimatedSpeedKmh(input.transport)) * 60;
+      if (from) {
+        const eta = await getLegEtaMinutes(from, { lat: candidate.lat, lng: candidate.lng }, input.transport, routing);
 
         if (eta > maxTravel) {
-          // Penalize rather than reject, so the app can still find a stop in sparse areas.
-          score -= 15 + (eta - maxTravel) * 0.8;
+          return { candidate, score: -999 };
+        }
+
+        score += Math.max(0, 4 - eta / 8);
+
+        if (input.transport === 'walk') {
+          score += Math.max(0, 6 - eta / 4);
         } else {
-          score += Math.max(0, 3 - eta / 10);
+          score += Math.max(0, 2 - eta / 15);
         }
       }
 
       return { candidate, score };
-    })
-    .filter((entry) => entry.score > -900)
-    .sort((a, b) => b.score - a.score);
+    }),
+  );
 
-  if (ranked.length === 0) return null;
+  const viable = exactRanked.filter((entry) => entry.score > -900).sort((a, b) => b.score - a.score);
 
-  const top = ranked.slice(0, Math.min(4, ranked.length));
-  const pickIndex = deterministicIndex(`${seed}-${token}-${tokenIndex}`, top.length);
+  if (viable.length === 0) {
+    // As a fallback, return the best cheap-ranked candidate.
+    return cheapRanked[0]?.candidate || null;
+  }
 
-  return top[pickIndex].candidate;
+  const bestScore = viable[0].score;
+  const qualityPool = viable.filter((entry) => entry.score >= bestScore - qualityFloorOffset);
+  const windowedPool = qualityPool.slice(0, Math.min(selectionWindow, qualityPool.length));
+
+  if (windowedPool.length === 0) {
+    return viable[0].candidate;
+  }
+
+  const pickIndex = deterministicIndex(`${seed}-${token}-${tokenIndex}`, windowedPool.length);
+  return windowedPool[pickIndex].candidate;
 };
 
 export interface ScheduledStop extends PlaceCandidate {
@@ -262,14 +436,16 @@ export interface ScheduledStop extends PlaceCandidate {
 }
 
 /**
- * Builds a time-based schedule that never exceeds the time window.
- * If travel consumes too much time, tail stops are dropped.
+ * Builds timed stops from ordered places and route legs. The time budget first
+ * reserves travel, then distributes remaining minutes across stops by category.
  */
 export const scheduleItinerary = (
   orderedStops: PlaceCandidate[],
   input: WizardInput,
   startTime: string,
   endTime: string,
+  routeLegs: RouteLeg[] = [],
+  originLeg?: RouteLeg,
 ): ScheduledStop[] => {
   if (orderedStops.length === 0) return [];
 
@@ -278,16 +454,21 @@ export const scheduleItinerary = (
   const totalWindow = Math.max(0, end - start);
   if (totalWindow <= 0) return [];
 
-  const maxTravel = Math.max(5, input.preferences.maxTravelMinutes || 30);
-
   const computeTravel = (stops: PlaceCandidate[]) =>
     stops.map((_, i) => {
-      if (i === 0) return 0;
+      if (i === 0) {
+        const originEta = originLeg?.etaMin;
+        if (typeof originEta === 'number' && Number.isFinite(originEta)) return originEta;
+        return 0;
+      }
+
+      const routeEta = routeLegs[i - 1]?.etaMin;
+      if (typeof routeEta === 'number' && Number.isFinite(routeEta)) return routeEta;
+
       const prev = stops[i - 1];
       const curr = stops[i];
       const dist = haversineKm(prev.lat, prev.lng, curr.lat, curr.lng);
-      const eta = (dist / estimatedSpeedKmh(input.transport)) * 60;
-      return clamp(Math.round(eta), 0, maxTravel);
+      return Math.max(1, Math.round((dist / estimatedSpeedKmh(input.transport)) * 60));
     });
 
   const sum = (arr: number[]) => arr.reduce((a, b) => a + b, 0);
@@ -307,7 +488,7 @@ export const scheduleItinerary = (
     return [
       {
         ...stops[0],
-        travelMinutesFromPrev: 0,
+        travelMinutesFromPrev: travel[0] ?? 0,
         durationMinutes: totalWindow,
         startTime,
         endTime,
@@ -327,7 +508,7 @@ export const scheduleItinerary = (
   const effectiveMins =
     minSum <= usable ? rules.map((r) => r.min) : rules.map((r) => Math.max(1, Math.floor((r.min / minSum) * usable)));
 
-  let durations = stops.map((_, i) => {
+  const durations = stops.map((_, i) => {
     const target = Math.round((usable * weights[i]) / weightSum);
     return clamp(target, effectiveMins[i], rules[i].max);
   });
@@ -360,7 +541,7 @@ export const scheduleItinerary = (
   const scheduled: ScheduledStop[] = [];
 
   for (let i = 0; i < stops.length; i += 1) {
-    cursor += travel[i];
+    cursor += travel[i] ?? 0;
     if (cursor >= end) break;
 
     const stopStart = cursor;
@@ -369,7 +550,7 @@ export const scheduleItinerary = (
 
     scheduled.push({
       ...stops[i],
-      travelMinutesFromPrev: travel[i],
+      travelMinutesFromPrev: travel[i] ?? 0,
       durationMinutes,
       startTime: minutesToTime(stopStart),
       endTime: minutesToTime(stopEnd),

@@ -31,4 +31,14 @@ describe('category policy', () => {
     });
     expect(result.accepted).toBe(false);
   });
+
+  it('accepts landmark-style result for attractions', () => {
+    const result = evaluateCategoryCandidate('attraction', {
+      name: 'Riverfront Observation Deck',
+      address: 'Orlando, FL',
+      types: ['tourist_attraction', 'point_of_interest'],
+    });
+    expect(result.accepted).toBe(true);
+    expect(result.score).toBeGreaterThanOrEqual(2);
+  });
 });
