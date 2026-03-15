@@ -7,6 +7,7 @@ expo-env.d.ts
 .DS_Store
 # local runtime folders
 .expo/
+.npm-cache/
 node_modules/
 # local env secrets
 .env
