@@ -1,15 +1,16 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Linking, StyleSheet } from 'react-native';
-import { ActivityIndicator, Card, Text } from 'react-native-paper';
+import { ActivityIndicator, Card, Text, useTheme } from 'react-native-paper';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { useLocation } from '@/context/LocationContext';
 import { usePlanStore } from '@/store/usePlanStore';
 import { buildAppleMapsDirectionsUrl, hasValidCoords, LatLng } from '@/utils/maps';
-import { palette, spacing } from '@/theme/appTheme';
+import { spacing } from '@/theme/appTheme';
 
 export default function TodayMode() {
+  const theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const location = useLocation();
   const plans = usePlanStore((s) => s.plans);
@@ -62,9 +63,9 @@ export default function TodayMode() {
       <AppCard>
         <Card.Title title="Next Stop" subtitle={next.name} />
         <Card.Content>
-          <Text>{next.address}</Text>
-          <Text>ETA: {next.etaMin || 10} minutes</Text>
-          {helperText ? <Text style={styles.helperText}>{helperText}</Text> : null}
+          <Text style={{ color: theme.colors.onSurface }}>{next.address}</Text>
+          <Text style={{ color: theme.colors.onSurface }}>ETA: {next.etaMin || 10} minutes</Text>
+          {helperText ? <Text style={[styles.helperText, { color: theme.colors.onSurfaceVariant }]}>{helperText}</Text> : null}
         </Card.Content>
         <Card.Actions>
           <PrimaryButton disabled={!mapsReady} onPress={openAppleMaps}>
@@ -72,7 +73,7 @@ export default function TodayMode() {
           </PrimaryButton>
           <SecondaryButton onPress={() => {}}>We're leaving now</SecondaryButton>
         </Card.Actions>
-        {originLoading ? <ActivityIndicator style={styles.loader} size="small" color={palette.primary} /> : null}
+        {originLoading ? <ActivityIndicator style={styles.loader} size="small" color={theme.colors.primary} /> : null}
       </AppCard>
       {plan ? <PrimaryButton onPress={() => setFeedbackVisible(true)}>Finish Day</PrimaryButton> : null}
       {plan ? (
@@ -93,7 +94,6 @@ export default function TodayMode() {
 
 const styles = StyleSheet.create({
   helperText: {
-    color: palette.muted,
     marginTop: spacing.sm,
   },
   loader: {

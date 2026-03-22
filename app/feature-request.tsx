@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Vibration, View } from 'react-native';
-import { SegmentedButtons, Snackbar, Text, TextInput } from 'react-native-paper';
+import { SegmentedButtons, Snackbar, Text, TextInput, useTheme } from 'react-native-paper';
 import { AppCard, AppScreen, PrimaryButton } from '@/components/ui';
 import { submitFeatureRequest } from '@/services/feedback';
 import { FeatureRequestCategory } from '@/types/models';
-import { palette, spacing } from '@/theme/appTheme';
+import { spacing } from '@/theme/appTheme';
 
 const categories: { value: 'none' | FeatureRequestCategory; label: string }[] = [
   // Lightweight beta categories for quick triage in exports/backends.
@@ -16,6 +16,7 @@ const categories: { value: 'none' | FeatureRequestCategory; label: string }[] = 
 ];
 
 export default function FeatureRequestScreen() {
+  const theme = useTheme();
   const [message, setMessage] = useState('');
   const [category, setCategory] = useState<'none' | FeatureRequestCategory>('none');
   const [pending, setPending] = useState(false);
@@ -49,10 +50,10 @@ export default function FeatureRequestScreen() {
               multiline
               numberOfLines={6}
               mode="outlined"
-              style={styles.input}
+              style={[styles.input, { backgroundColor: theme.colors.surface }]}
             />
             <View>
-              <Text variant="titleSmall" style={styles.label}>
+              <Text variant="titleSmall" style={[styles.label, { color: theme.colors.onSurface }]}>
                 Optional category
               </Text>
               <SegmentedButtons
@@ -81,13 +82,11 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   input: {
-    backgroundColor: palette.surface,
   },
   segmented: {
     marginTop: spacing.sm,
   },
   label: {
-    color: palette.text,
     fontWeight: '600',
   },
 });

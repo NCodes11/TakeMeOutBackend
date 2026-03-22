@@ -11,6 +11,7 @@ import { Card, SegmentedButtons, Text, useTheme } from 'react-native-paper';
 import { useMemo, useState } from 'react';
 import { spacing } from '@/theme/appTheme';
 import { buildGoogleMapsPinUrl, hasValidCoords } from '@/utils/maps';
+import { resolveDisplayPriceTier } from '@/utils/priceTier';
 import { Stop, WizardInput } from '@/types/models';
 
 const isViewMode = (value: string): value is 'timeline' | 'list' =>
@@ -259,6 +260,7 @@ export default function GeneratedPlanScreen() {
               <StopCard
                 key={s.id}
                 stop={s}
+                fallbackBudget={plan.budget}
                 rerolling={rerolling}
                 onReroll={() => handleReroll(s.order, rerolling)}
                 onPressInfo={handleOpenPlaceInfo}
@@ -286,6 +288,7 @@ export default function GeneratedPlanScreen() {
                   subtitle={[
                     s.category,
                     s.address,
+                    `Price ${resolveDisplayPriceTier(s.priceLevel, s.costLevel, plan.budget)}`,
                     s.startTime && s.endTime ? `${s.startTime}–${s.endTime}` : '',
                   ]
                     .filter(Boolean)

@@ -1,8 +1,8 @@
 import { ReactNode } from 'react';
 import { ScrollView, ScrollViewProps, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Text } from 'react-native-paper';
-import { palette, spacing } from '@/theme/appTheme';
+import { Text, useTheme } from 'react-native-paper';
+import { spacing } from '@/theme/appTheme';
 
 interface AppScreenProps {
   children: ReactNode;
@@ -14,16 +14,17 @@ interface AppScreenProps {
 }
 
 export const AppScreen = ({ children, title, subtitle, scroll = true, style, contentContainerStyle }: AppScreenProps) => {
+  const theme = useTheme();
   const body = (
     <View style={[styles.content, style]}>
-      {title ? <Text variant="headlineSmall" style={styles.title}>{title}</Text> : null}
-      {subtitle ? <Text variant="bodyMedium" style={styles.subtitle}>{subtitle}</Text> : null}
+      {title ? <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onSurface }]}>{title}</Text> : null}
+      {subtitle ? <Text variant="bodyMedium" style={[styles.subtitle, { color: theme.colors.onSurfaceVariant }]}>{subtitle}</Text> : null}
       {children}
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
       {scroll ? (
         <ScrollView contentContainerStyle={[styles.scrollContent, contentContainerStyle]}>{body}</ScrollView>
       ) : (
@@ -36,7 +37,6 @@ export const AppScreen = ({ children, title, subtitle, scroll = true, style, con
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: palette.background,
   },
   scrollContent: {
     paddingBottom: spacing.xxl,
@@ -47,11 +47,9 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   title: {
-    color: palette.text,
     fontWeight: '700',
   },
   subtitle: {
-    color: palette.muted,
     marginTop: -spacing.xs,
   },
 });

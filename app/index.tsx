@@ -1,13 +1,14 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
-import { Card, Modal, Portal, SegmentedButtons, Text, TextInput } from 'react-native-paper';
+import { Card, Modal, Portal, SegmentedButtons, Text, TextInput, useTheme } from 'react-native-paper';
 import { AppCard, AppScreen, GhostButton, PrimaryButton } from '@/components/ui';
 import { useLocation } from '@/context/LocationContext';
 import { useTimeFormat } from '@/context/PreferencesContext';
-import { palette, spacing } from '@/theme/appTheme';
+import { spacing } from '@/theme/appTheme';
 
 export default function HomeScreen() {
+  const theme = useTheme();
   const { coords, placeLabel, permission, mode, updatedAt, refreshLocation, setMode, setManualLocation } = useLocation();
   const timeFormat = useTimeFormat();
   const [manualInput, setManualInput] = useState(placeLabel);
@@ -105,7 +106,7 @@ export default function HomeScreen() {
     <AppScreen contentContainerStyle={styles.screenContent} style={styles.screenInner}>
       <View style={styles.mainCluster}>
         <View style={styles.brandWrap}>
-          <Text style={styles.brandTitle}>TAKE ME OUT</Text>
+          <Text style={[styles.brandTitle, { color: theme.colors.onSurface }]}>TAKE ME OUT</Text>
         </View>
         <AppCard>
           <Card.Content>
@@ -120,7 +121,7 @@ export default function HomeScreen() {
               }}
               buttons={[{ value: 'live', label: 'Use Live GPS' }, { value: 'manual', label: 'Use Manual Location' }]}
             />
-            <Text variant="bodySmall" style={styles.helperText}>
+            <Text variant="bodySmall" style={[styles.helperText, { color: theme.colors.onSurfaceVariant }]}>
               {mode === 'live'
                 ? `Live GPS • ${
                     updatedAt
@@ -140,9 +141,9 @@ export default function HomeScreen() {
               onChangeText={setManualInput}
               editable={mode === 'manual'}
               mode="outlined"
-              style={styles.input}
+              style={[styles.input, { backgroundColor: theme.colors.surface }]}
             />
-            {detectError ? <Text style={styles.errorText}>{detectError}</Text> : null}
+            {detectError ? <Text style={[styles.errorText, { color: theme.colors.error }]}>{detectError}</Text> : null}
             <View style={styles.row}>
               <PrimaryButton
                 onPress={onStartPlan}
@@ -160,8 +161,12 @@ export default function HomeScreen() {
         </View>
       </View>
       <Portal>
-        <Modal visible={manualPromptVisible} onDismiss={() => setManualPromptVisible(false)} contentContainerStyle={styles.modal}>
-          <Text variant="titleMedium" style={styles.modalTitle}>Choose a different location</Text>
+        <Modal
+          visible={manualPromptVisible}
+          onDismiss={() => setManualPromptVisible(false)}
+          contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}
+        >
+          <Text variant="titleMedium" style={[styles.modalTitle, { color: theme.colors.onSurface }]}>Choose a different location</Text>
           <TextInput
             label="City or address"
             placeholder="Orlando, FL"
@@ -203,18 +208,14 @@ const styles = StyleSheet.create({
     fontSize: 34,
     lineHeight: 38,
     letterSpacing: 3,
-    color: palette.text,
     textAlign: 'center',
   },
   input: {
-    backgroundColor: palette.surface,
   },
   helperText: {
-    color: palette.muted,
     marginTop: spacing.xs,
   },
   errorText: {
-    color: palette.danger,
     marginTop: spacing.sm,
   },
   row: {
@@ -227,11 +228,9 @@ const styles = StyleSheet.create({
     margin: spacing.lg,
     padding: spacing.lg,
     borderRadius: 16,
-    backgroundColor: palette.surface,
     gap: spacing.md,
   },
   modalTitle: {
-    color: palette.text,
     fontWeight: '700',
   },
   modalActions: {

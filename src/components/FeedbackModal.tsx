@@ -8,11 +8,11 @@ import {
   Vibration,
   View,
 } from 'react-native';
-import { Modal, Portal, Text, TextInput } from 'react-native-paper';
+import { Modal, Portal, Text, TextInput, useTheme } from 'react-native-paper';
 import { PrimaryButton, SecondaryButton } from '@/components/ui';
 import { Plan, Stop } from '@/types/models';
 import { submitTripFeedback } from '@/services/feedback';
-import { palette, spacing } from '@/theme/appTheme';
+import { spacing } from '@/theme/appTheme';
 
 interface FeedbackModalProps {
   visible: boolean;
@@ -23,6 +23,7 @@ interface FeedbackModalProps {
 }
 
 export const FeedbackModal = ({ visible, plan, stops, onDismiss, onSubmitted }: FeedbackModalProps) => {
+  const theme = useTheme();
   const [thumbsUp, setThumbsUp] = useState<boolean | null>(null);
   const [message, setMessage] = useState('');
   const [pending, setPending] = useState(false);
@@ -79,49 +80,69 @@ export const FeedbackModal = ({ visible, plan, stops, onDismiss, onSubmitted }: 
 
   return (
     <Portal>
-      <Modal visible={visible} onDismiss={onDismiss} contentContainerStyle={styles.modal}>
+      <Modal visible={visible} onDismiss={onDismiss} contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           {submitted ? (
             <View style={styles.content}>
-              <Text variant="titleMedium" style={styles.title}>
+              <Text variant="titleMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
                 Thanks! Your feedback helps make Take Me Out better.
               </Text>
               <PrimaryButton onPress={onSubmitted}>Done</PrimaryButton>
             </View>
           ) : (
             <View style={styles.content}>
-              <Text variant="titleLarge" style={styles.title}>
+              <Text variant="titleLarge" style={[styles.title, { color: theme.colors.onSurface }]}>
                 How was your day?
               </Text>
               <View style={styles.choiceRow}>
                 <Animated.View style={{ transform: [{ scale: upScale }], flex: 1 }}>
                   <Pressable
-                    style={[styles.choice, thumbsUp === true && styles.choiceSelected]}
+                    style={[
+                      styles.choice,
+                      {
+                        borderColor: theme.colors.outline,
+                        backgroundColor: theme.colors.surfaceVariant,
+                      },
+                      thumbsUp === true && {
+                        borderColor: theme.colors.primary,
+                        backgroundColor: theme.colors.primaryContainer,
+                      },
+                    ]}
                     onPress={() => {
                       setThumbsUp(true);
                       animateChoice(true);
                     }}
                   >
                     <Text style={styles.emoji}>👍</Text>
-                    <Text style={styles.choiceLabel}>Loved it</Text>
+                    <Text style={[styles.choiceLabel, { color: theme.colors.onSurface }]}>Loved it</Text>
                   </Pressable>
                 </Animated.View>
                 <Animated.View style={{ transform: [{ scale: downScale }], flex: 1 }}>
                   <Pressable
-                    style={[styles.choice, thumbsUp === false && styles.choiceSelected]}
+                    style={[
+                      styles.choice,
+                      {
+                        borderColor: theme.colors.outline,
+                        backgroundColor: theme.colors.surfaceVariant,
+                      },
+                      thumbsUp === false && {
+                        borderColor: theme.colors.primary,
+                        backgroundColor: theme.colors.primaryContainer,
+                      },
+                    ]}
                     onPress={() => {
                       setThumbsUp(false);
                       animateChoice(false);
                     }}
                   >
                     <Text style={styles.emoji}>👎</Text>
-                    <Text style={styles.choiceLabel}>Could be better</Text>
+                    <Text style={[styles.choiceLabel, { color: theme.colors.onSurface }]}>Could be better</Text>
                   </Pressable>
                 </Animated.View>
               </View>
               {thumbsUp != null ? (
                 <>
-                  <Text variant="bodySmall" style={styles.hint}>
+                  <Text variant="bodySmall" style={[styles.hint, { color: theme.colors.onSurfaceVariant }]}>
                     {selectedHint}
                   </Text>
                   <TextInput
@@ -132,7 +153,7 @@ export const FeedbackModal = ({ visible, plan, stops, onDismiss, onSubmitted }: 
                     placeholder={'Stops were too far apart\nLoved the outdoor suggestions\nWish there were more attractions'}
                     value={message}
                     onChangeText={setMessage}
-                    style={styles.input}
+                    style={[styles.input, { backgroundColor: theme.colors.surface }]}
                   />
                   <PrimaryButton onPress={onSend} loading={pending} disabled={pending}>
                     Send Feedback
@@ -155,13 +176,11 @@ const styles = StyleSheet.create({
     margin: spacing.lg,
     padding: spacing.lg,
     borderRadius: 16,
-    backgroundColor: palette.surface,
   },
   content: {
     gap: spacing.md,
   },
   title: {
-    color: palette.text,
     fontWeight: '700',
   },
   choiceRow: {
@@ -170,28 +189,17 @@ const styles = StyleSheet.create({
   },
   choice: {
     borderWidth: 1,
-    borderColor: palette.border,
     borderRadius: 14,
     paddingVertical: spacing.lg,
     alignItems: 'center',
     gap: spacing.xs,
-    backgroundColor: '#f8fafc',
-  },
-  choiceSelected: {
-    borderColor: palette.primary,
-    backgroundColor: '#eff6ff',
   },
   emoji: {
     fontSize: 30,
   },
   choiceLabel: {
-    color: palette.text,
     fontWeight: '600',
   },
-  hint: {
-    color: palette.muted,
-  },
-  input: {
-    backgroundColor: palette.surface,
-  },
+  hint: {},
+  input: {},
 });

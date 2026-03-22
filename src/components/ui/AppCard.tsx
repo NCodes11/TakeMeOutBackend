@@ -1,22 +1,32 @@
 import { ReactNode } from 'react';
 import { StyleSheet } from 'react-native';
-import { Card } from 'react-native-paper';
-import { palette } from '@/theme/appTheme';
+import { Card, useTheme } from 'react-native-paper';
 
 interface AppCardProps {
   children: ReactNode;
 }
 
-export const AppCard = ({ children }: AppCardProps) => (
-  <Card style={styles.card} mode="contained">
-    {children}
-  </Card>
-);
+export const AppCard = ({ children }: AppCardProps) => {
+  const theme = useTheme();
+
+  return (
+    <Card
+      style={[
+        styles.card,
+        {
+          backgroundColor: theme.colors.surface,
+          borderColor: theme.colors.outline,
+        },
+      ]}
+      mode="contained"
+    >
+      {children}
+    </Card>
+  );
+};
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: palette.surface,
-    borderColor: palette.border,
     borderWidth: 1,
     borderRadius: 16,
   },

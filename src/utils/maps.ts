@@ -14,3 +14,10 @@ export const buildAppleMapsDirectionsUrl = (origin: LatLng, destination: LatLng,
 
 export const buildAppleMapsPinUrl = (destination: LatLng, name: string) =>
   `https://maps.apple.com/?ll=${destination.lat},${destination.lng}&q=${encodeURIComponent(name)}`;
+
+export const buildGoogleMapsPinUrl = (destination: LatLng, name?: string) => {
+  const query = name?.trim()
+    ? `${destination.lat},${destination.lng} (${name.trim()})`
+    : `${destination.lat},${destination.lng}`;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+};

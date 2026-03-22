@@ -91,8 +91,8 @@ const shuffle = <T,>(arr: T[]) => {
   return a;
 };
 
-const toCostLevel = (priceLevel?: number): string => {
-  if (typeof priceLevel !== 'number') return 'Unknown';
+const toCostLevel = (priceLevel?: number): string | undefined => {
+  if (typeof priceLevel !== 'number' || !Number.isFinite(priceLevel)) return undefined;
   if (priceLevel <= 1) return '$';
   if (priceLevel === 2) return '$$';
   if (priceLevel === 3) return '$$$';
@@ -486,7 +486,6 @@ out body 100;`;
             category: 'activity',
             address: city,
             tags: Object.values(tags),
-            costLevel: '$',
             stopType: 'activity',
             photoUrl: undefined,
             photos: [],

@@ -11,6 +11,7 @@ import {
 } from './itineraryEngine';
 import { evaluateCategoryCandidate } from '@/providers/categoryPolicy';
 import { getExplicitSelectedStopTypes, getSoloSuitabilityScore } from './soloSuitability';
+import { resolveDisplayPriceTier } from '@/utils/priceTier';
 
 const DEFAULT_STOP_TYPE: StopType = 'restaurant';
 const ensureStopType = (value: StopType | undefined | null): StopType => value ?? DEFAULT_STOP_TYPE;
@@ -611,7 +612,7 @@ export const generateStops = async (
       endTime: s.endTime,
       durationMin: s.durationMinutes,
 
-      costLevel: s.costLevel || input.budget,
+      costLevel: resolveDisplayPriceTier(s.priceLevel, s.costLevel, input.budget),
       why: `Fits your ${input.groupType.toLowerCase()} day and ${input.preferences.interests[0] || 'general'} interests.`,
       locked: 0,
 
@@ -771,7 +772,7 @@ export const rerollStop = async (params: {
       endTime: s.endTime,
       durationMin: s.durationMinutes,
 
-      costLevel: s.costLevel || input.budget,
+      costLevel: resolveDisplayPriceTier(s.priceLevel, s.costLevel, input.budget),
       why:
         prevStop?.why ||
         `Fits your ${input.groupType.toLowerCase()} day and ${input.preferences.interests[0] || 'general'} interests.`,

@@ -27,6 +27,19 @@ export const costLabelToTier = (costLevel?: string): number | null => {
 export const resolvePlaceTier = (priceLevel?: number, costLevel?: string): number | null =>
   priceLevelToTier(priceLevel) ?? costLabelToTier(costLevel);
 
+export const tierToBudgetLabel = (tier: number | null | undefined, fallback: BudgetType = '$$'): BudgetType => {
+  if (typeof tier !== 'number' || !Number.isFinite(tier)) return fallback;
+  if (tier <= 1) return '$';
+  if (tier === 2) return '$$';
+  return '$$$';
+};
+
+export const resolveDisplayPriceTier = (
+  priceLevel?: number,
+  costLevel?: string,
+  fallback: BudgetType = '$$',
+): BudgetType => tierToBudgetLabel(resolvePlaceTier(priceLevel, costLevel), fallback);
+
 // Unknown price is allowed but slightly penalized in ranking instead of being excluded.
 export const isTierAllowed = (placeTier: number | null, selectedBudget: BudgetType): boolean =>
   placeTier == null || placeTier <= budgetToMaxTier(selectedBudget);

@@ -1,14 +1,17 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Card, Text } from 'react-native-paper';
+import { Card, Text, useTheme } from 'react-native-paper';
 import { SecondaryButton } from '@/components/ui';
 import { useTimeFormat } from '@/context/PreferencesContext';
-import { Stop } from '@/types/models';
-import { palette, spacing } from '@/theme/appTheme';
+import { BudgetType, Stop } from '@/types/models';
+import { spacing } from '@/theme/appTheme';
+import { resolveDisplayPriceTier } from '@/utils/priceTier';
 import { formatTimeDisplay } from '@/utils/time';
 
 type Props = {
   stop: Stop;
+  fallbackBudget?: BudgetType;
+  onPressInfo?: (stop: Stop) => void;
   onReroll?: () => void;
   onOpenMap?: () => void | Promise<void>;
   /**
@@ -17,11 +20,20 @@ type Props = {
   rerolling?: boolean;
 };
 
-export function StopCard({ stop, onReroll, onOpenMap, rerolling }: Props) {
+export function StopCard({ stop, fallbackBudget, onPressInfo, onReroll, onOpenMap, rerolling }: Props) {
+  const theme = useTheme();
   const timeFormat = useTimeFormat();
   const timeLabel = stop.startTime && stop.endTime
     ? `${formatTimeDisplay(stop.startTime, timeFormat)}–${formatTimeDisplay(stop.endTime, timeFormat)}`
     : undefined;
+  const priceTier = resolveDisplayPriceTier(stop.priceLevel, stop.costLevel, fallbackBudget ?? '$$');
+  const metaItems = [
+    typeof stop.durationMin === 'number' ? `${stop.durationMin} min` : null,
+    `Price ${priceTier}`,
+    typeof stop.etaMin === 'number' && stop.order > 0 ? `${stop.etaMin} min travel` : null,
+    typeof stop.rating === 'number' ? `${stop.rating.toFixed(1)}★` : null,
+    typeof stop.reviewCount === 'number' ? `${stop.reviewCount}` : null,
+  ].filter((value): value is string => Boolean(value));
 
   return (
     <View style={styles.wrap}>
@@ -29,17 +41,17 @@ export function StopCard({ stop, onReroll, onOpenMap, rerolling }: Props) {
         <Card.Content style={styles.content}>
           <View style={styles.headerRow}>
             <View style={styles.titleCol}>
-              <Text variant="titleMedium" style={styles.title}>
+              <Text variant="titleMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
                 {stop.name}
               </Text>
 
-              <Text variant="bodySmall" style={styles.subTitle}>
+              <Text variant="bodySmall" style={[styles.subTitle, { color: theme.colors.onSurfaceVariant }]}>
                 {stop.category}
                 {timeLabel ? ` · ${timeLabel}` : ''}
               </Text>
 
               {stop.address ? (
-                <Text variant="bodySmall" style={styles.address}>
+                <Text variant="bodySmall" style={[styles.address, { color: theme.colors.onSurfaceVariant }]}>
                   {stop.address}
                 </Text>
               ) : null}
@@ -47,33 +59,21 @@ export function StopCard({ stop, onReroll, onOpenMap, rerolling }: Props) {
           </View>
 
           <View style={styles.metaRow}>
-            {typeof stop.durationMin === 'number' ? (
-              <Text variant="bodySmall" style={styles.meta}>
-                {stop.durationMin} min
+            {metaItems.map((item, index) => (
+              <Text key={`${stop.id}-${item}`} variant="bodySmall" style={[styles.meta, { color: theme.colors.onSurfaceVariant }]}>
+                {index === 0 ? item : `· ${item}`}
               </Text>
-            ) : null}
-
-            {typeof stop.etaMin === 'number' && stop.order > 0 ? (
-              <Text variant="bodySmall" style={styles.meta}>
-                · {stop.etaMin} min travel
-              </Text>
-            ) : null}
-
-            {typeof stop.rating === 'number' ? (
-              <Text variant="bodySmall" style={styles.meta}>
-                · {stop.rating.toFixed(1)}★
-              </Text>
-            ) : null}
-
-            {typeof stop.reviewCount === 'number' ? (
-              <Text variant="bodySmall" style={styles.meta}>
-                · {stop.reviewCount}
-              </Text>
-            ) : null}
+            ))}
           </View>
 
-          {(onOpenMap || onReroll) && (
+          {(onPressInfo || onOpenMap || onReroll) && (
             <View style={styles.actions}>
+              {onPressInfo ? (
+                <View style={styles.actionItem}>
+                  <SecondaryButton onPress={() => onPressInfo(stop)}>Place Info</SecondaryButton>
+                </View>
+              ) : null}
+
               {onOpenMap ? (
                 <View style={styles.actionItem}>
                   <SecondaryButton onPress={onOpenMap}>Open in Maps</SecondaryButton>
@@ -120,28 +120,21 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   title: {
-    color: palette.text,
     fontWeight: '700',
   },
-  subTitle: {
-    color: palette.muted,
-  },
-  address: {
-    color: palette.muted,
-  },
+  subTitle: {},
+  address: {},
   metaRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
   },
-  meta: {
-    color: palette.muted,
-  },
+  meta: {},
 
   // Keeps both buttons on the same row.
   actions: {
     flexDirection: 'row',
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.xs,
   },
@@ -149,6 +142,6 @@ const styles = StyleSheet.create({
   // Makes each button take equal space so widths don’t change when loading.
   actionItem: {
     flex: 1,
-    minWidth: 0,
+    minWidth: 120,
   },
 });

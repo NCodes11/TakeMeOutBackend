@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
-import { Text } from 'react-native-paper';
+import { Text, useTheme } from 'react-native-paper';
 import { Stop } from '@/types/models';
+import { RouteLeg } from '@/providers/routingProvider';
 import { hasValidCoords } from '@/utils/maps';
-import { palette, spacing } from '@/theme/appTheme';
+import { spacing } from '@/theme/appTheme';
 
-export const RouteMap = ({ stops }: { stops: Stop[] }) => {
+export const RouteMap = ({ stops }: { stops: Stop[]; routeLegs?: RouteLeg[] }) => {
+  const theme = useTheme();
   const mapRef = useRef<MapView | null>(null);
   // Ignore stops with missing coordinates so the map never crashes on partial data.
   const points = stops
@@ -49,9 +51,9 @@ export const RouteMap = ({ stops }: { stops: Stop[] }) => {
 
   if (points.length === 0) {
     return (
-      <View style={styles.emptyMap}>
-        <Text variant="bodyMedium" style={styles.emptyTitle}>Map unavailable</Text>
-        <Text variant="bodySmall" style={styles.emptyText}>No GPS coordinates were found for this plan.</Text>
+      <View style={[styles.emptyMap, { borderColor: theme.colors.outline, backgroundColor: theme.colors.surface }]}>
+        <Text variant="bodyMedium" style={[styles.emptyTitle, { color: theme.colors.onSurface }]}>Map unavailable</Text>
+        <Text variant="bodySmall" style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>No GPS coordinates were found for this plan.</Text>
       </View>
     );
   }
@@ -64,12 +66,12 @@ export const RouteMap = ({ stops }: { stops: Stop[] }) => {
     >
       {points.map((p, i) => (
         <Marker coordinate={p} key={i} title={p.title} description={p.description}>
-          <View style={styles.pin}>
+          <View style={[styles.pin, { backgroundColor: theme.colors.primary }]}>
             <Text style={styles.pinText}>{p.order + 1}</Text>
           </View>
         </Marker>
       ))}
-      <Polyline coordinates={coordinates} strokeWidth={4} strokeColor="#4f46e5" />
+      <Polyline coordinates={coordinates} strokeWidth={4} strokeColor={theme.colors.primary} />
     </MapView>
   );
 };
@@ -83,7 +85,6 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: palette.primary,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -98,19 +99,15 @@ const styles = StyleSheet.create({
     height: 180,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: spacing.lg,
   },
   emptyTitle: {
-    color: palette.text,
     marginBottom: spacing.xs,
     fontWeight: '600',
   },
   emptyText: {
-    color: palette.muted,
     textAlign: 'center',
   },
 });

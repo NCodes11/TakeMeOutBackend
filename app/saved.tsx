@@ -1,14 +1,15 @@
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { FlatList, StyleSheet, View } from 'react-native';
-import { Card, Text, TextInput } from 'react-native-paper';
+import { Card, Text, TextInput, useTheme } from 'react-native-paper';
 import { AppCard, AppScreen, ChoiceButtonGroup, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { GROUP_FILTER_OPTIONS } from '@/constants/groupTypes';
 import { usePlanStore } from '@/store/usePlanStore';
 import { GroupType } from '@/types/models';
-import { palette, spacing } from '@/theme/appTheme';
+import { spacing } from '@/theme/appTheme';
 
 export default function SavedPlans() {
+  const theme = useTheme();
   const plans = usePlanStore((s) => s.plans);
   const [q, setQ] = useState('');
   const [group, setGroup] = useState<'all' | GroupType>('all');
@@ -20,9 +21,9 @@ export default function SavedPlans() {
       <TextInput mode="outlined" label="Search city/date" value={q} onChangeText={setQ} />
       <ChoiceButtonGroup value={group} onValueChange={setGroup} options={GROUP_FILTER_OPTIONS} />
       {filtered.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text variant="titleMedium" style={styles.emptyTitle}>No plans found</Text>
-          <Text variant="bodySmall" style={styles.emptyText}>Try a different filter or create a new itinerary.</Text>
+        <View style={[styles.emptyState, { borderColor: theme.colors.outline, backgroundColor: theme.colors.surface }]}>
+          <Text variant="titleMedium" style={[styles.emptyTitle, { color: theme.colors.onSurface }]}>No plans found</Text>
+          <Text variant="bodySmall" style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>Try a different filter or create a new itinerary.</Text>
         </View>
       ) : null}
       <FlatList
@@ -52,16 +53,11 @@ const styles = StyleSheet.create({
   emptyState: {
     padding: spacing.lg,
     borderWidth: 1,
-    borderColor: palette.border,
     borderRadius: 14,
-    backgroundColor: palette.surface,
     marginTop: spacing.sm,
   },
   emptyTitle: {
-    color: palette.text,
     marginBottom: spacing.xs,
   },
-  emptyText: {
-    color: palette.muted,
-  },
+  emptyText: {},
 });
