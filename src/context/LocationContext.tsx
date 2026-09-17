@@ -1,7 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { AppState } from 'react-native';
-import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { fetchNominatimCoordinates } from '@/utils/geocoding';
 
 type PermissionStatus = 'granted' | 'denied' | 'undetermined';
 type LocationMode = 'live' | 'manual';
@@ -16,8 +26,14 @@ interface AppLocationState {
 
 interface LocationContextValue extends AppLocationState {
   setMode: (mode: LocationMode) => Promise<void>;
-  setManualLocation: (query: string) => Promise<{ coords: { latitude: number; longitude: number }; placeLabel: string }>;
-  refreshLocation: () => Promise<{ coords: { latitude: number; longitude: number } | null; placeLabel: string }>;
+  setManualLocation: (query: string) => Promise<{
+    coords: { latitude: number; longitude: number };
+    placeLabel: string;
+  }>;
+  refreshLocation: () => Promise<{
+    coords: { latitude: number; longitude: number } | null;
+    placeLabel: string;
+  }>;
 }
 
 const STORAGE_KEY = 'take-me-out.manual-location';
@@ -50,7 +66,11 @@ const loadManualLocation = async () => {
   // Restore the last successful manual geocode so manual mode survives app restarts.
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
-  const parsed = JSON.parse(raw) as { coords: { latitude: number; longitude: number }; placeLabel: string; updatedAt: number };
+  const parsed = JSON.parse(raw) as {
+    coords: { latitude: number; longitude: number };
+    placeLabel: string;
+    updatedAt: number;
+  };
   if (
     !parsed?.coords ||
     !Number.isFinite(parsed.coords.latitude) ||
@@ -70,22 +90,37 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     permission: 'undetermined',
   });
   const watchRef = useRef<Location.LocationSubscription | null>(null);
+  const modeRef = useRef<LocationMode>('live');
 
-  const setCoordsFromLocation = useCallback(async (coords: { latitude: number; longitude: number }) => {
-    // Reverse geocode once so all downstream screens can use the same city/state label.
-    const reverse = await Location.reverseGeocodeAsync(coords);
-    const label = formatPlaceLabel(reverse[0]);
-    console.log('[location] live_update', { coords, placeLabel: label });
-    setState((prev) => ({
-      ...prev,
-      coords,
-      placeLabel: label || prev.placeLabel,
-      updatedAt: Date.now(),
-    }));
-  }, []);
+  const setCoordsFromLocation = useCallback(
+    async (coords: { latitude: number; longitude: number }) => {
+      // Reverse geocode once so all downstream screens can use the same city/state label.
+      const reverse = await Location.reverseGeocodeAsync(coords);
+      const label = formatPlaceLabel(reverse[0]);
+      if (modeRef.current !== 'live') return label;
+
+      console.log('[location] live_update', { coords, placeLabel: label });
+      setState((prev) =>
+        prev.mode === 'live'
+          ? {
+              ...prev,
+              coords,
+              placeLabel: label || prev.placeLabel,
+              updatedAt: Date.now(),
+            }
+          : prev,
+      );
+      return label;
+    },
+    [],
+  );
 
   const stopWatching = useCallback(() => {
-    watchRef.current?.remove();
+    try {
+      watchRef.current?.remove();
+    } catch {
+      // expo-location's web subscription can throw on remove; the watcher is dropped either way.
+    }
     watchRef.current = null;
   }, []);
 
@@ -93,9 +128,17 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     // Keep a lightweight foreground watcher running while live mode is active.
     stopWatching();
     watchRef.current = await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.Balanced, distanceInterval: 50, timeInterval: 15000 },
+      {
+        accuracy: Location.Accuracy.Balanced,
+        distanceInterval: 50,
+        timeInterval: 15000,
+      },
       (position) => {
-        const coords = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+        if (modeRef.current !== 'live') return;
+        const coords = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
         setCoordsFromLocation(coords).catch(() => undefined);
       },
     );
@@ -105,13 +148,23 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     // Single-shot refresh used on app boot, resume, and manual "refresh location" paths.
     const permission = await Location.requestForegroundPermissionsAsync();
     const permissionState = toPermission(permission.status);
-    setState((prev) => ({ ...prev, permission: permissionState }));
+    setState((prev) => ({
+      ...prev,
+      permission: permissionState,
+      ...(prev.mode === 'live' && permissionState !== 'granted'
+        ? { coords: null, placeLabel: '' }
+        : {}),
+    }));
     if (permissionState !== 'granted') return { coords: null, placeLabel: '' };
-    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    const coords = { latitude: position.coords.latitude, longitude: position.coords.longitude };
-    await setCoordsFromLocation(coords);
-    const reverse = await Location.reverseGeocodeAsync(coords);
-    return { coords, placeLabel: formatPlaceLabel(reverse[0]) };
+    const position = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+    const coords = {
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+    };
+    const placeLabel = await setCoordsFromLocation(coords);
+    return { coords, placeLabel };
   }, [setCoordsFromLocation]);
 
   const refreshLocation = useCallback(async () => {
@@ -124,65 +177,95 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
     const first = results[0];
     if (!first) return { coords: state.coords, placeLabel: state.placeLabel };
     const coords = { latitude: first.latitude, longitude: first.longitude };
-    console.log('[location] manual_refresh', { placeLabel: state.placeLabel, coords });
-    const next = { coords, placeLabel: state.placeLabel, updatedAt: Date.now() };
+    console.log('[location] manual_refresh', {
+      placeLabel: state.placeLabel,
+      coords,
+    });
+    const next = {
+      coords,
+      placeLabel: state.placeLabel,
+      updatedAt: Date.now(),
+    };
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
     setState((prev) => ({ ...prev, ...next }));
     return { coords, placeLabel: state.placeLabel };
-  }, [refreshLive, state.mode, state.placeLabel]);
+  }, [refreshLive, state.coords, state.mode, state.placeLabel]);
 
-  const setManualLocation = useCallback(async (query: string) => {
-    const trimmed = query.trim();
-    if (!trimmed) throw new Error('Enter a location first.');
-    const geocoded = await Location.geocodeAsync(trimmed);
-    const first = geocoded[0];
-    if (!first) throw new Error('Unable to geocode that manual location.');
-    const coords = { latitude: first.latitude, longitude: first.longitude };
-    const payload = { coords, placeLabel: trimmed, updatedAt: Date.now() };
-    console.log('[location] manual_set', payload);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    await AsyncStorage.setItem(MODE_KEY, 'manual');
-    setState((prev) => ({
-      ...prev,
-      ...payload,
-      mode: 'manual',
-    }));
-    stopWatching();
-    return { coords, placeLabel: trimmed };
-  }, [stopWatching]);
+  const setManualLocation = useCallback(
+    async (query: string) => {
+      const trimmed = query.trim();
+      if (!trimmed) throw new Error('Enter a location first.');
+      const geocoded = await Location.geocodeAsync(trimmed).catch(() => []);
+      const first = geocoded[0];
+      const fallback = first ? null : await fetchNominatimCoordinates(trimmed);
+      const coords = first ? { latitude: first.latitude, longitude: first.longitude } : fallback;
 
-  const setMode = useCallback(async (mode: LocationMode) => {
-    await AsyncStorage.setItem(MODE_KEY, mode);
-    if (mode === 'manual') {
-      // Manual mode can start immediately from persisted coordinates (no permission prompt).
-      const manual = await loadManualLocation();
-      if (manual) {
-        setState((prev) => ({ ...prev, ...manual, mode: 'manual' }));
+      if (!coords) throw new Error('Unable to geocode that manual location.');
+
+      const payload = { coords, placeLabel: trimmed, updatedAt: Date.now() };
+      console.log('[location] manual_set', payload);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      await AsyncStorage.setItem(MODE_KEY, 'manual');
+      modeRef.current = 'manual';
+      setState((prev) => ({
+        ...prev,
+        ...payload,
+        mode: 'manual',
+      }));
+      stopWatching();
+      return { coords, placeLabel: trimmed };
+    },
+    [stopWatching],
+  );
+
+  const setMode = useCallback(
+    async (mode: LocationMode) => {
+      modeRef.current = mode;
+      await AsyncStorage.setItem(MODE_KEY, mode);
+      if (mode === 'manual') {
         stopWatching();
+        // Manual mode can start immediately from persisted coordinates (no permission prompt).
+        const manual = await loadManualLocation();
+        if (manual) {
+          setState((prev) => ({ ...prev, ...manual, mode: 'manual' }));
+          return;
+        }
+
+        setState((prev) => ({
+          ...prev,
+          coords: null,
+          placeLabel: '',
+          mode: 'manual',
+          updatedAt: Date.now(),
+        }));
         return;
       }
-    }
-    setState((prev) => ({ ...prev, mode }));
-    if (mode === 'live') {
-      // Live mode always refreshes first, then attaches the watcher.
-      await refreshLive();
-      await startWatching();
-    } else {
-      stopWatching();
-    }
-  }, [refreshLive, startWatching, stopWatching]);
+      setState((prev) => ({ ...prev, coords: null, placeLabel: '', mode }));
+      if (mode === 'live') {
+        // Live mode always refreshes first, then attaches the watcher.
+        await refreshLive();
+        await startWatching();
+      } else {
+        stopWatching();
+      }
+    },
+    [refreshLive, startWatching, stopWatching],
+  );
 
   useEffect(() => {
     let mounted = true;
 
     const boot = async () => {
       // Recover preferred mode from storage; default to live if manual data is missing.
-      const persistedMode = ((await AsyncStorage.getItem(MODE_KEY)) as LocationMode | null) || 'live';
+      const persistedMode =
+        ((await AsyncStorage.getItem(MODE_KEY)) as LocationMode | null) || 'live';
       const manual = await loadManualLocation();
       if (!mounted) return;
       if (persistedMode === 'manual' && manual) {
+        modeRef.current = 'manual';
         setState((prev) => ({ ...prev, ...manual, mode: 'manual' }));
       } else {
+        modeRef.current = 'live';
         await AsyncStorage.setItem(MODE_KEY, 'live');
         await refreshLive();
         await startWatching();
@@ -195,6 +278,10 @@ export const LocationProvider = ({ children }: { children: ReactNode }) => {
       stopWatching();
     };
   }, [refreshLive, startWatching, stopWatching]);
+
+  useEffect(() => {
+    modeRef.current = state.mode;
+  }, [state.mode]);
 
   useEffect(() => {
     // Refresh live location when app returns to foreground to avoid stale coordinates.

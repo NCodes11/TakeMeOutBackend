@@ -1,147 +1,233 @@
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Card, Text, useTheme } from 'react-native-paper';
-import { SecondaryButton } from '@/components/ui';
+import { StyleSheet, Text, View } from 'react-native';
+import { MonoLabel, SecondaryButton, TimeText } from '@/components/ui';
 import { useTimeFormat } from '@/context/PreferencesContext';
-import { BudgetType, Stop } from '@/types/models';
-import { spacing } from '@/theme/appTheme';
-import { resolveDisplayPriceTier } from '@/utils/priceTier';
+import { Stop } from '@/types/models';
+import { fonts, radius, spacing, useAppPalette } from '@/theme/appTheme';
 import { formatTimeDisplay } from '@/utils/time';
+import { resolvePrimaryPhotoUrl } from '@/utils/stopMedia';
+import { StopHeroMedia } from '@/components/StopHeroMedia';
 
 type Props = {
   stop: Stop;
-  fallbackBudget?: BudgetType;
-  onPressInfo?: (stop: Stop) => void;
   onReroll?: () => void;
-  onOpenMap?: () => void | Promise<void>;
-  /**
-   * When true, the reroll button shows a spinner and becomes disabled.
-   */
+  onPressInfo?: (stop: Stop) => void;
+  onOpenMap?: () => void;
   rerolling?: boolean;
+  /** Draw the trailing hairline (off for the last stop in a list). */
+  divider?: boolean;
 };
 
-export function StopCard({ stop, fallbackBudget, onPressInfo, onReroll, onOpenMap, rerolling }: Props) {
-  const theme = useTheme();
+function isPlusCodeAddress(address?: string | null) {
+  if (!address) return false;
+  return /^[A-Z0-9]{4,8}\+\w+/i.test(address.trim());
+}
+
+function getDisplayAddress(stop: Stop): string | undefined {
+  const rawAddress = stop.address?.trim();
+
+  if (!rawAddress) {
+    return undefined;
+  }
+
+  if (!isPlusCodeAddress(rawAddress)) {
+    return rawAddress;
+  }
+
+  const parts = rawAddress.split(' ').filter(Boolean);
+
+  if (parts.length > 1) {
+    const withoutPlusCode = parts.slice(1).join(' ').trim();
+    if (withoutPlusCode) {
+      return withoutPlusCode;
+    }
+  }
+
+  return undefined;
+}
+
+function formatDuration(minutes: number) {
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h} h ${m}` : `${h} h`;
+}
+
+function priceLabel(stop: Stop): string | undefined {
+  if (stop.costLevel && /^\$+$/.test(stop.costLevel)) return stop.costLevel;
+  if (typeof stop.priceLevel === 'number' && Number.isFinite(stop.priceLevel)) {
+    return '$'.repeat(Math.max(1, Math.min(4, Math.round(stop.priceLevel))));
+  }
+  return undefined;
+}
+
+export function StopCard({
+  stop,
+  onReroll,
+  onPressInfo,
+  onOpenMap,
+  rerolling,
+  divider = true,
+}: Props) {
+  const p = useAppPalette();
   const timeFormat = useTimeFormat();
-  const timeLabel = stop.startTime && stop.endTime
-    ? `${formatTimeDisplay(stop.startTime, timeFormat)}–${formatTimeDisplay(stop.endTime, timeFormat)}`
-    : undefined;
-  const priceTier = resolveDisplayPriceTier(stop.priceLevel, stop.costLevel, fallbackBudget ?? '$$');
-  const metaItems = [
-    typeof stop.durationMin === 'number' ? `${stop.durationMin} min` : null,
-    `Price ${priceTier}`,
-    typeof stop.etaMin === 'number' && stop.order > 0 ? `${stop.etaMin} min travel` : null,
-    typeof stop.rating === 'number' ? `${stop.rating.toFixed(1)}★` : null,
-    typeof stop.reviewCount === 'number' ? `${stop.reviewCount}` : null,
-  ].filter((value): value is string => Boolean(value));
+
+  const timeLabel =
+    stop.startTime && stop.endTime
+      ? `${formatTimeDisplay(stop.startTime, timeFormat)}–${formatTimeDisplay(stop.endTime, timeFormat)}`
+      : undefined;
+
+  const displayAddress = getDisplayAddress(stop);
+  const heroUri = resolvePrimaryPhotoUrl(stop);
+  const price = priceLabel(stop);
+
+  const facts: string[] = [];
+  if (typeof stop.rating === 'number') {
+    facts.push(
+      typeof stop.reviewCount === 'number'
+        ? `${stop.rating.toFixed(1)} ★ · ${stop.reviewCount}`
+        : `${stop.rating.toFixed(1)} ★`,
+    );
+  }
+  if (price) facts.push(price);
+  if (typeof stop.etaMin === 'number' && stop.order > 0) facts.push(`${stop.etaMin} min travel`);
 
   return (
-    <View style={styles.wrap}>
-      <Card mode="outlined">
-        <Card.Content style={styles.content}>
-          <View style={styles.headerRow}>
-            <View style={styles.titleCol}>
-              <Text variant="titleMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
-                {stop.name}
-              </Text>
+    <View style={[styles.wrap, divider && { borderBottomWidth: 1, borderBottomColor: p.line }]}>
+      <View style={styles.topRow}>
+        <View style={styles.topLeft}>
+          <Text style={[styles.index, { color: p.violetText }]}>
+            {String(stop.order + 1).padStart(2, '0')}
+          </Text>
+          <MonoLabel style={styles.category} numberOfLines={1}>
+            {stop.category}
+          </MonoLabel>
+        </View>
+        {timeLabel || typeof stop.durationMin === 'number' ? (
+          <TimeText style={styles.time}>
+            {timeLabel}
+            {timeLabel && typeof stop.durationMin === 'number' ? (
+              <Text style={{ color: p.textLow }}> · {formatDuration(stop.durationMin)}</Text>
+            ) : typeof stop.durationMin === 'number' ? (
+              formatDuration(stop.durationMin)
+            ) : null}
+          </TimeText>
+        ) : null}
+      </View>
 
-              <Text variant="bodySmall" style={[styles.subTitle, { color: theme.colors.onSurfaceVariant }]}>
-                {stop.category}
-                {timeLabel ? ` · ${timeLabel}` : ''}
-              </Text>
+      <View style={styles.media}>
+        <StopHeroMedia stop={stop} uri={heroUri} height={150} />
+      </View>
 
-              {stop.address ? (
-                <Text variant="bodySmall" style={[styles.address, { color: theme.colors.onSurfaceVariant }]}>
-                  {stop.address}
-                </Text>
-              ) : null}
-            </View>
-          </View>
+      <View style={styles.titleBlock}>
+        <Text style={[styles.title, { color: p.textHigh }]}>{stop.name}</Text>
+        {displayAddress ? (
+          <Text style={[styles.address, { color: p.textMid }]} numberOfLines={2}>
+            {displayAddress}
+          </Text>
+        ) : null}
+      </View>
 
-          <View style={styles.metaRow}>
-            {metaItems.map((item, index) => (
-              <Text key={`${stop.id}-${item}`} variant="bodySmall" style={[styles.meta, { color: theme.colors.onSurfaceVariant }]}>
-                {index === 0 ? item : `· ${item}`}
-              </Text>
-            ))}
-          </View>
+      {stop.why ? (
+        <View style={[styles.why, { borderLeftColor: p.violetDecorative }]}>
+          <Text style={[styles.whyText, { color: p.textMid }]}>{stop.why}</Text>
+        </View>
+      ) : null}
 
-          {(onPressInfo || onOpenMap || onReroll) && (
-            <View style={styles.actions}>
-              {onPressInfo ? (
-                <View style={styles.actionItem}>
-                  <SecondaryButton onPress={() => onPressInfo(stop)}>Place Info</SecondaryButton>
-                </View>
-              ) : null}
+      {facts.length > 0 ? (
+        <Text style={[styles.facts, { color: p.textLow }]}>{facts.join('    ')}</Text>
+      ) : null}
 
-              {onOpenMap ? (
-                <View style={styles.actionItem}>
-                  <SecondaryButton onPress={onOpenMap}>Open in Maps</SecondaryButton>
-                </View>
-              ) : null}
-
-              {onReroll ? (
-                <View style={styles.actionItem}>
-                  <SecondaryButton
-                    disabled={Boolean(rerolling)}
-                    loading={Boolean(rerolling)}
-                    onPress={() => {
-                      if (rerolling) return;
-                      onReroll();
-                    }}
-                  >
-                    Reroll
-                  </SecondaryButton>
-                </View>
-              ) : null}
-            </View>
-          )}
-        </Card.Content>
-      </Card>
+      <View style={styles.actions}>
+        <SecondaryButton icon="information-outline" onPress={() => onPressInfo?.(stop)}>
+          Info
+        </SecondaryButton>
+        {onOpenMap ? (
+          <SecondaryButton icon="map-outline" onPress={onOpenMap}>
+            Maps
+          </SecondaryButton>
+        ) : null}
+        {onReroll ? (
+          <SecondaryButton
+            icon="refresh"
+            disabled={Boolean(rerolling)}
+            loading={Boolean(rerolling)}
+            onPress={() => {
+              if (rerolling) return;
+              onReroll();
+            }}
+          >
+            Reroll
+          </SecondaryButton>
+        ) : null}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: {
-    marginBottom: spacing.sm,
+    paddingVertical: 20,
+    gap: 12,
   },
-  content: {
-    padding: spacing.md,
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  headerRow: {
+  topLeft: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+    flexShrink: 1,
   },
-  titleCol: {
-    flex: 1,
-    gap: spacing.xs,
+  index: {
+    fontFamily: fonts.monoSemi,
+    fontSize: 12,
+  },
+  category: {
+    flexShrink: 1,
+  },
+  time: {
+    fontSize: 12,
+    flexShrink: 0,
+  },
+  media: {
+    borderRadius: radius.media,
+    overflow: 'hidden',
+  },
+  titleBlock: {
+    gap: 3,
   },
   title: {
-    fontWeight: '700',
+    fontFamily: fonts.displaySemi,
+    fontSize: 19,
+    lineHeight: 24,
+    letterSpacing: -0.2,
   },
-  subTitle: {},
-  address: {},
-  metaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
+  address: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    lineHeight: 18,
   },
-  meta: {},
-
-  // Keeps both buttons on the same row.
+  why: {
+    borderLeftWidth: 2,
+    paddingLeft: 12,
+  },
+  whyText: {
+    fontFamily: fonts.body,
+    fontSize: 13.5,
+    lineHeight: 21,
+  },
+  facts: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    lineHeight: 16,
+  },
   actions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.xs,
-  },
-
-  // Makes each button take equal space so widths don’t change when loading.
-  actionItem: {
-    flex: 1,
-    minWidth: 120,
+    gap: 10,
+    marginTop: 2,
   },
 });

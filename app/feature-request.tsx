@@ -1,29 +1,39 @@
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Vibration, View } from 'react-native';
-import { SegmentedButtons, Snackbar, Text, TextInput, useTheme } from 'react-native-paper';
-import { AppCard, AppScreen, PrimaryButton } from '@/components/ui';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, Vibration, View } from 'react-native';
+import {
+  AppScreen,
+  ChipGroup,
+  Dock,
+  Notice,
+  PrimaryButton,
+  SectionLabel,
+  UnderlineInput,
+} from '@/components/ui';
 import { submitFeatureRequest } from '@/services/feedback';
 import { FeatureRequestCategory } from '@/types/models';
-import { spacing } from '@/theme/appTheme';
+import { fonts, useAppPalette } from '@/theme/appTheme';
 
-const categories: { value: 'none' | FeatureRequestCategory; label: string }[] = [
-  // Lightweight beta categories for quick triage in exports/backends.
+type Category = 'none' | FeatureRequestCategory;
+
+const categories: readonly { value: Category; label: string }[] = [
   { value: 'none', label: 'No category' },
-  { value: 'New Feature', label: 'New Feature' },
-  { value: 'Bug Report', label: 'Bug Report' },
-  { value: 'UI Improvement', label: 'UI Improvement' },
+  { value: 'New Feature', label: 'New feature' },
+  { value: 'Bug Report', label: 'Bug' },
+  { value: 'UI Improvement', label: 'UI improvement' },
   { value: 'Other', label: 'Other' },
 ];
 
 export default function FeatureRequestScreen() {
-  const theme = useTheme();
+  const p = useAppPalette();
   const [message, setMessage] = useState('');
-  const [category, setCategory] = useState<'none' | FeatureRequestCategory>('none');
+  const [category, setCategory] = useState<Category>('none');
   const [pending, setPending] = useState(false);
-  const [toastVisible, setToastVisible] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const canSend = message.trim().length > 0 && !pending;
 
   const onSubmit = async () => {
-    if (pending) return;
+    if (!canSend) return;
     // Submissions are async + tolerant: local save first, optional remote sync in background.
     setPending(true);
     Vibration.vibrate(10);
@@ -34,59 +44,72 @@ export default function FeatureRequestScreen() {
     setMessage('');
     setCategory('none');
     setPending(false);
-    setToastVisible(true);
+    setSent(true);
   };
 
   return (
-    <AppScreen title="Suggest a Feature">
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <AppCard>
-          <View style={styles.content}>
-            <TextInput
-              label="What would you love to see added to Take Me Out?"
-              placeholder={'Group planning\nSaved trips\nFilters by vibe\nWeather-aware trips\nBudget estimates'}
-              value={message}
-              onChangeText={setMessage}
-              multiline
-              numberOfLines={6}
-              mode="outlined"
-              style={[styles.input, { backgroundColor: theme.colors.surface }]}
-            />
-            <View>
-              <Text variant="titleSmall" style={[styles.label, { color: theme.colors.onSurface }]}>
-                Optional category
-              </Text>
-              <SegmentedButtons
-                value={category}
-                onValueChange={(next) => setCategory(next as 'none' | FeatureRequestCategory)}
-                buttons={categories}
-                style={styles.segmented}
-              />
-            </View>
-            <PrimaryButton onPress={onSubmit} loading={pending} disabled={pending}>
-              Send Suggestion
-            </PrimaryButton>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <AppScreen
+        title="Suggest a feature"
+        subtitle="Product ideas, rough edges, or anything that would make a day out better."
+        dockSpace
+      >
+        <SectionLabel first>Your idea</SectionLabel>
+        <UnderlineInput
+          placeholder="What would you love to see in Take Me Out?"
+          value={message}
+          onChangeText={(next) => {
+            setMessage(next);
+            if (sent) setSent(false);
+          }}
+          multiline
+          numberOfLines={5}
+          textAlignVertical="top"
+          style={styles.textarea}
+        />
+        <Text style={[styles.hint, { color: p.textLow }]}>
+          Examples: group planning, weather-aware days, budget estimates.
+        </Text>
+
+        <SectionLabel>Category</SectionLabel>
+        <ChipGroup options={categories} value={category} onChange={setCategory} />
+
+        {sent ? (
+          <View style={styles.sent}>
+            <Notice tone="violet" title="Sent — thank you">
+              Your suggestion helps shape what comes next.
+            </Notice>
           </View>
-        </AppCard>
-      </KeyboardAvoidingView>
-      <Snackbar visible={toastVisible} onDismiss={() => setToastVisible(false)} duration={2200}>
-        Thanks for helping shape Take Me Out!
-      </Snackbar>
-    </AppScreen>
+        ) : null}
+      </AppScreen>
+
+      <Dock>
+        <PrimaryButton icon="send-outline" onPress={onSubmit} loading={pending} disabled={!canSend}>
+          Send suggestion
+        </PrimaryButton>
+      </Dock>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
-    gap: spacing.md,
-    padding: spacing.md,
+  flex: {
+    flex: 1,
   },
-  input: {
+  textarea: {
+    minHeight: 120,
+    paddingTop: 10,
   },
-  segmented: {
-    marginTop: spacing.sm,
+  hint: {
+    fontFamily: fonts.body,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 10,
   },
-  label: {
-    fontWeight: '600',
+  sent: {
+    marginTop: 24,
   },
 });

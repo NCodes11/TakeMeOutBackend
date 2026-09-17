@@ -1,19 +1,23 @@
 {
   "colors": {
-    "background": "#F8FAFC",
+    "background": "#F8F7FC",
     "surface": "#FFFFFF",
-    "textPrimary": "#111827",
-    "textSecondary": "#6B7280",
-    "primary": "#4F46E5",
-    "accent": "#0EA5E9",
-    "success": "#10B981"
+    "surfaceAlt": "#F0EDF8",
+    "textPrimary": "#15181D",
+    "textSecondary": "#6C6678",
+    "primary": "#6D28D9",
+    "secondary": "#7C3AED",
+    "accent": "#8B5CF6",
+    "success": "#16815F",
+    "danger": "#C93D3D",
+    "border": "#DED8EA"
   },
   "typography": {
-    "title": { "fontSize": 28, "fontWeight": 700 },
-    "heading": { "fontSize": 20, "fontWeight": 600 },
+    "title": { "fontSize": 32, "fontWeight": 900 },
+    "heading": { "fontSize": 20, "fontWeight": 900 },
     "body": { "fontSize": 16, "fontWeight": 400 },
-    "caption": { "fontSize": 13, "fontWeight": 400 }
+    "caption": { "fontSize": 13, "fontWeight": 700 }
   },
   "spacing": { "xs": 4, "sm": 8, "md": 16, "lg": 24, "xl": 32 },
-  "radius": { "card": 14, "button": 12, "input": 10 }
+  "radius": { "card": 8, "button": 12, "input": 12 }
 }

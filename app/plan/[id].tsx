@@ -3,28 +3,43 @@ import { StopCard } from '@/components/StopCard';
 import { FeedbackModal } from '@/components/FeedbackModal';
 import { PlaceInfoModal } from '@/components/PlaceInfoModal';
 import { GenerationLoadingOverlay } from '@/components/GenerationLoadingOverlay';
-import { AppCard, AppScreen, PrimaryButton, SecondaryButton } from '@/components/ui';
+import {
+  AppScreen,
+  Dock,
+  GhostButton,
+  Notice,
+  PrimaryButton,
+  RouteHeader,
+  RouteListRow,
+  SecondaryButton,
+  Segmented,
+} from '@/components/ui';
 import { usePlanStore } from '@/store/usePlanStore';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Alert, Linking, Share, StyleSheet, View } from 'react-native';
-import { Card, SegmentedButtons, Text, useTheme } from 'react-native-paper';
+import { Alert, Linking, Share, StyleSheet, Text, View } from 'react-native';
 import { useMemo, useState } from 'react';
-import { spacing } from '@/theme/appTheme';
+import { spacing, useAppPalette } from '@/theme/appTheme';
 import { buildGoogleMapsPinUrl, hasValidCoords } from '@/utils/maps';
-import { resolveDisplayPriceTier } from '@/utils/priceTier';
 import { WizardInput, Stop } from '@/types/models';
+import { RouteLeg } from '@/providers/routingProvider';
 
-const isViewMode = (value: string): value is 'timeline' | 'list' =>
-  value === 'timeline' || value === 'list';
+type ViewMode = 'map' | 'list';
 
-export default function GeneratedPlanScreen() {
-  const theme = useTheme();
+const VIEW_OPTIONS = [
+  { value: 'map', label: 'Map' },
+  { value: 'list', label: 'List' },
+] as const;
+const EMPTY_STOPS: Stop[] = [];
+const EMPTY_ROUTE_LEGS: RouteLeg[] = [];
+
+export default function PlanDetailScreen() {
+  const p = useAppPalette();
   const { id } = useLocalSearchParams<{ id: string }>();
   const planId = typeof id === 'string' ? id : '';
 
   const plans = usePlanStore((s) => s.plans);
-  const stops = usePlanStore((s) => s.stopsByPlan[planId] || []);
-  const routeLegs = usePlanStore((s) => s.routeLegsByPlan[planId] || []);
+  const stops = usePlanStore((s) => s.stopsByPlan[planId] ?? EMPTY_STOPS);
+  const routeLegs = usePlanStore((s) => s.routeLegsByPlan[planId] ?? EMPTY_ROUTE_LEGS);
   const warning = usePlanStore((s) => s.warning);
   const error = usePlanStore((s) => s.error);
   const loading = usePlanStore((s) => s.loading);
@@ -33,12 +48,12 @@ export default function GeneratedPlanScreen() {
   const rerollStop = usePlanStore((s) => s.rerollStop);
   const rerollingByPlan = usePlanStore((s) => s.rerollingByPlan);
 
-  const [view, setView] = useState<'timeline' | 'list'>('timeline');
+  const [view, setView] = useState<ViewMode>('map');
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [selectedStop, setSelectedStop] = useState<Stop | null>(null);
   const [placeInfoVisible, setPlaceInfoVisible] = useState(false);
 
-  const plan = plans.find((p) => p.id === planId);
+  const plan = plans.find((pl) => pl.id === planId);
   const orderedStops = [...stops].sort((a, b) => a.order - b.order);
 
   const handleOpenPlaceInfo = (stop: Stop) => {
@@ -69,6 +84,10 @@ export default function GeneratedPlanScreen() {
       groupType: plan.groupType,
       transport: plan.transport,
       budget: plan.budget,
+      pace:
+        preferences.pace === 'relaxed' || preferences.pace === 'packed'
+          ? preferences.pace
+          : 'standard',
       feelingLucky: Boolean(preferences?.feelingLucky),
       returnToStart: plan.returnToStart,
 
@@ -76,9 +95,7 @@ export default function GeneratedPlanScreen() {
       startLng: plan.startLng,
 
       stopCount:
-        typeof preferences?.stopCount === 'number'
-          ? preferences.stopCount
-          : orderedStops.length,
+        typeof preferences?.stopCount === 'number' ? preferences.stopCount : orderedStops.length,
 
       adults: typeof preferences?.adults === 'number' ? preferences.adults : 2,
       kids: typeof preferences?.kids === 'number' ? preferences.kids : 0,
@@ -88,10 +105,7 @@ export default function GeneratedPlanScreen() {
         typeof preferences?.startLocationMode === 'string'
           ? preferences.startLocationMode
           : 'my-location',
-      startAddress:
-        typeof preferences?.startAddress === 'string'
-          ? preferences.startAddress
-          : '',
+      startAddress: typeof preferences?.startAddress === 'string' ? preferences.startAddress : '',
 
       preferences: {
         interests: Array.isArray(preferences?.interests) ? preferences.interests : [],
@@ -106,23 +120,26 @@ export default function GeneratedPlanScreen() {
     } as WizardInput;
   }, [plan, orderedStops.length]);
 
-  if (!plan) return <Text>Plan not found</Text>;
+  if (!plan) {
+    return (
+      <AppScreen title="Plan not found">
+        <Text style={{ color: p.textMid }}>This plan is no longer available.</Text>
+      </AppScreen>
+    );
+  }
 
   const handleReroll = (stopOrder: number, rerolling: boolean) => {
     if (rerolling) return;
     if (!derivedInput) return;
 
     void rerollStop(planId, derivedInput, stopOrder).catch((e) => {
-      const message =
-        e instanceof Error ? e.message : 'Unable to reroll. Please try again.';
+      const message = e instanceof Error ? e.message : 'Unable to reroll. Please try again.';
       Alert.alert('Reroll failed', message);
     });
   };
 
   const handleSharePlan = async () => {
-    const stopLines = orderedStops
-      .map((stop, index) => `${index + 1}. ${stop.name}`)
-      .join('\n');
+    const stopLines = orderedStops.map((stop, index) => `${index + 1}. ${stop.name}`).join('\n');
 
     const message = [
       `Check out this Take Me Out plan for ${plan.city} on ${plan.date}.`,
@@ -136,184 +153,163 @@ export default function GeneratedPlanScreen() {
         message,
       });
     } catch (e) {
-      const message =
-        e instanceof Error ? e.message : 'Unable to share this plan right now.';
+      const message = e instanceof Error ? e.message : 'Unable to share this plan right now.';
       Alert.alert('Share failed', message);
     }
   };
 
+  const openInMaps = async (s: Stop) => {
+    if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
+      Alert.alert(
+        'Missing location data',
+        'This stop is missing coordinates. Regenerate your plan to refresh place details.',
+      );
+      return;
+    }
+    await Linking.openURL(buildGoogleMapsPinUrl({ lat: s.lat, lng: s.lng }));
+  };
+
+  const totalKm = routeLegs.reduce((sum, leg) => sum + leg.distanceKm, 0);
+  const totalTravelMin = routeLegs.reduce((sum, leg) => sum + leg.etaMin, 0);
+
   return (
     <>
-    <AppScreen>
-      <Text variant="headlineSmall" style={[styles.topTitle, { color: theme.colors.onSurface }]}>
-        {plan.city} · {plan.date}
-      </Text>
+      <AppScreen dockSpace>
+        <RouteHeader
+          eyebrow={plan.title ? plan.title : 'Saved plan'}
+          title={plan.city}
+          date={plan.date}
+          startTime={plan.startTime}
+          endTime={plan.endTime}
+          stopCount={orderedStops.length}
+          distanceKm={routeLegs.length ? totalKm : undefined}
+          travelMin={routeLegs.length ? totalTravelMin : undefined}
+          transport={plan.transport}
+          action={<GhostButton onPress={handleSharePlan}>Share</GhostButton>}
+        />
 
-      <SegmentedButtons
-        value={view}
-        onValueChange={(v) => {
-          if (isViewMode(v)) setView(v);
-        }}
-        buttons={[
-          { value: 'timeline', label: 'Timeline' },
-          { value: 'list', label: 'List' },
-        ]}
-      />
+        <Segmented options={VIEW_OPTIONS} value={view} onChange={setView} style={styles.segment} />
 
-      <RouteMap stops={orderedStops} routeLegs={routeLegs} />
+        {view === 'map' ? (
+          <View style={styles.mapWrap}>
+            <RouteMap stops={orderedStops} routeLegs={routeLegs} />
+          </View>
+        ) : null}
 
-      {warning ? (
-        <View
-          style={[
-            styles.warningState,
-            {
-              borderColor: theme.colors.secondary,
-              backgroundColor: theme.colors.secondaryContainer,
-            },
-          ]}
-        >
-          <Text variant="bodySmall" style={{ color: theme.colors.onSecondaryContainer }}>
-            {warning}
-          </Text>
-        </View>
-      ) : null}
+        {warning ? (
+          <View style={styles.notice}>
+            <Notice tone="signal" title="Heads up">
+              {warning}
+            </Notice>
+          </View>
+        ) : null}
 
-      {error ? (
-        <View
-          style={[
-            styles.errorState,
-            {
-              borderColor: theme.colors.error,
-              backgroundColor: theme.colors.errorContainer,
-            },
-          ]}
-        >
-          <Text variant="bodySmall" style={{ color: theme.colors.onErrorContainer }}>
-            {error}
-          </Text>
-        </View>
-      ) : null}
+        {error ? (
+          <View style={styles.notice}>
+            <Notice title="Something went wrong">{error}</Notice>
+          </View>
+        ) : null}
 
-      {view === 'timeline'
-        ? orderedStops.map((s) => {
-            const rerolling = Boolean(rerollingByPlan[planId]?.[s.order]);
-
-            return (
-              <StopCard
-                key={s.id}
-                stop={s}
-                fallbackBudget={plan.budget}
-                rerolling={rerolling}
-                onPressInfo={handleOpenPlaceInfo}
-                onReroll={() => handleReroll(s.order, rerolling)}
-                onOpenMap={async () => {
-                  if (!hasValidCoords({ lat: s.lat, lng: s.lng })) {
-                    Alert.alert(
-                      'Missing location data',
-                      'This stop is missing coordinates. Regenerate your plan to refresh place details.',
-                    );
-                    return;
-                  }
-                  const url = buildGoogleMapsPinUrl({ lat: s.lat, lng: s.lng });
-                  await Linking.openURL(url);
-                }}
-              />
-            );
-          })
-        : orderedStops.map((s, index) => {
-            const rerolling = Boolean(rerollingByPlan[planId]?.[s.order]);
-
-            return (
-              <AppCard key={s.id}>
-                <Card.Content style={styles.listCardContent}>
-                  <Text
-                    variant="titleMedium"
-                    style={[styles.listCardTitle, { color: theme.colors.onSurface }]}
+        <View style={styles.stops}>
+          {view === 'map'
+            ? orderedStops.map((s, index) => {
+                const rerolling = Boolean(rerollingByPlan[planId]?.[s.order]);
+                return (
+                  <StopCard
+                    key={s.id}
+                    stop={s}
+                    rerolling={rerolling}
+                    divider={index < orderedStops.length - 1}
+                    onPressInfo={handleOpenPlaceInfo}
+                    onReroll={() => handleReroll(s.order, rerolling)}
+                    onOpenMap={() => void openInMaps(s)}
+                  />
+                );
+              })
+            : orderedStops.map((s, index) => {
+                const rerolling = Boolean(rerollingByPlan[planId]?.[s.order]);
+                return (
+                  <RouteListRow
+                    key={s.id}
+                    stop={s}
+                    divider={index < orderedStops.length - 1}
                     onPress={() => handleOpenPlaceInfo(s)}
-                  >
-                    {index + 1}. {s.name}
-                  </Text>
+                    actions={
+                      <>
+                        <SecondaryButton icon="map-outline" onPress={() => void openInMaps(s)}>
+                          Maps
+                        </SecondaryButton>
+                        <SecondaryButton
+                          icon="refresh"
+                          disabled={rerolling}
+                          loading={rerolling}
+                          onPress={() => handleReroll(s.order, rerolling)}
+                        >
+                          Reroll
+                        </SecondaryButton>
+                      </>
+                    }
+                  />
+                );
+              })}
+        </View>
 
-                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                    {[s.category, s.address, `Price ${resolveDisplayPriceTier(s.priceLevel, s.costLevel, plan.budget)}`]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </Text>
-                </Card.Content>
+        {orderedStops.length > 0 ? (
+          <View style={styles.finishRow}>
+            <GhostButton icon="check-circle-outline" onPress={() => setFeedbackVisible(true)}>
+              Finish day
+            </GhostButton>
+          </View>
+        ) : null}
 
-                <Card.Actions>
-                  <SecondaryButton onPress={() => handleOpenPlaceInfo(s)}>
-                    Place Info
-                  </SecondaryButton>
+        <FeedbackModal
+          visible={feedbackVisible}
+          plan={plan}
+          stops={orderedStops}
+          onDismiss={() => setFeedbackVisible(false)}
+          onSubmitted={() => {
+            setFeedbackVisible(false);
+            router.push('/');
+          }}
+        />
 
-                  <SecondaryButton
-                    disabled={rerolling}
-                    loading={rerolling}
-                    onPress={() => handleReroll(s.order, rerolling)}
-                  >
-                    {rerolling ? 'Finding…' : 'Reroll'}
-                  </SecondaryButton>
-                </Card.Actions>
-              </AppCard>
-            );
-          })}
+        <PlaceInfoModal
+          visible={placeInfoVisible}
+          stop={selectedStop}
+          onDismiss={handleClosePlaceInfo}
+        />
+      </AppScreen>
 
-      <View style={styles.actions}>
-        <SecondaryButton onPress={handleSharePlan}>Share Plan</SecondaryButton>
-      </View>
+      <Dock>
+        <PrimaryButton
+          icon="navigation-variant-outline"
+          disabled={orderedStops.length === 0}
+          onPress={() => router.push(`/today/${plan.id}`)}
+        >
+          Start day
+        </PrimaryButton>
+      </Dock>
 
-      <PrimaryButton onPress={() => setFeedbackVisible(true)}>
-        Finish Day
-      </PrimaryButton>
-
-      <FeedbackModal
-        visible={feedbackVisible}
-        plan={plan}
-        stops={orderedStops}
-        onDismiss={() => setFeedbackVisible(false)}
-        onSubmitted={() => {
-          setFeedbackVisible(false);
-          router.push('/');
-        }}
-      />
-
-      <PlaceInfoModal
-        visible={placeInfoVisible}
-        stop={selectedStop}
-        onDismiss={handleClosePlaceInfo}
-      />
-    </AppScreen>
-    <GenerationLoadingOverlay visible={loading} progress={loadingProgress} />
+      <GenerationLoadingOverlay visible={loading} progress={loadingProgress} />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  topTitle: {
-    fontWeight: '700',
-    marginBottom: spacing.xs,
-    textAlign: 'center',
-    width: '100%',
+  segment: {
+    marginTop: 16,
   },
-  listCardTitle: {
-    textDecorationLine: 'underline',
+  mapWrap: {
+    marginTop: 14,
   },
-  listCardContent: {
-    gap: spacing.xs,
+  notice: {
+    marginTop: 14,
   },
-  actions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
+  stops: {
+    marginTop: 4,
   },
-  warningState: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: spacing.sm,
-  },
-  errorState: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: spacing.sm,
+  finishRow: {
+    alignItems: 'center',
+    marginTop: spacing.md,
   },
 });

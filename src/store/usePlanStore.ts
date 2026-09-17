@@ -2,7 +2,12 @@ import { create } from 'zustand';
 import { initDb, getPlans, getPlanStops, savePlan } from '@/db/sqlite';
 import { NominatimOverpassProvider } from '@/providers/placesProvider';
 import { OsrmProvider, RouteLeg } from '@/providers/routingProvider';
-import { buildFeelingLuckyStopTypes, generateStops, rerollStop as rerollStopService } from '@/services/generator';
+import {
+  buildFeelingLuckyStopTypes,
+  generateStops,
+  resolvePlannableStopCount,
+  rerollStop as rerollStopService,
+} from '@/services/generator';
 import { Plan, Stop, WizardInput } from '@/types/models';
 import * as Crypto from 'expo-crypto';
 import { logPerf, perfNow } from '@/utils/perf';
@@ -26,6 +31,9 @@ interface PlanState {
   createPlan: (input: WizardInput) => Promise<string>;
   reorderStops: (planId: string, from: number, to: number) => void;
 
+  saveExistingPlan: (planId: string, customTitle?: string) => void;
+  unsavePlan: (planId: string) => void;
+
   regenerate: (planId: string, input: WizardInput) => Promise<void>;
   rerollStop: (planId: string, input: WizardInput, stopOrder: number) => Promise<void>;
 }
@@ -34,7 +42,12 @@ const buildOrigin = (inputOrPlan: { startLat?: number; startLng?: number }) => {
   const lat = inputOrPlan.startLat;
   const lng = inputOrPlan.startLng;
 
-  if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+  if (
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng)
+  ) {
     return { lat, lng };
   }
 
@@ -52,6 +65,16 @@ const resolveMaxTravelMinutes = (input: WizardInput) => {
   return Math.max(5, Math.min(120, Math.round(value)));
 };
 
+const shouldWarnInsufficientStops = (generatedCount: number, input: WizardInput) => {
+  const expectedCount = resolvePlannableStopCount(
+    input.startTime,
+    input.endTime,
+    input.stopCount || 3,
+  );
+
+  return expectedCount > 0 && generatedCount < expectedCount;
+};
+
 const serializePreferencesJSON = (input: WizardInput) =>
   JSON.stringify({
     ...input.preferences,
@@ -62,6 +85,7 @@ const serializePreferencesJSON = (input: WizardInput) =>
     kidAges: input.kidAges,
     startLocationMode: input.startLocationMode,
     startAddress: input.startAddress,
+    pace: input.pace || 'standard',
   });
 
 const resolveSearchInterests = (input: WizardInput) => {
@@ -113,7 +137,12 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
 
   createPlan: async (input) => {
-    set({ loading: true, loadingProgress: 0.08, error: undefined, warning: undefined });
+    set({
+      loading: true,
+      loadingProgress: 0.08,
+      error: undefined,
+      warning: undefined,
+    });
 
     try {
       const totalStart = perfNow();
@@ -127,15 +156,21 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const searchInterests = resolveSearchInterests(input);
 
       const fetchStart = perfNow();
-      const { places, warnings } = await provider.search(input.city, searchInterests, origin, input.stopCount, {
-        transport: input.transport,
-        maxTravelMinutes,
-        stopCount: input.stopCount,
-        groupType: input.groupType,
-        budget: input.budget,
-        mode: 'plan',
-        cacheTtlMinutes: 60,
-      });
+      const { places, warnings } = await provider.search(
+        input.city,
+        searchInterests,
+        origin,
+        input.stopCount,
+        {
+          transport: input.transport,
+          maxTravelMinutes,
+          stopCount: input.stopCount,
+          groupType: input.groupType,
+          budget: input.budget,
+          mode: 'plan',
+          cacheTtlMinutes: 60,
+        },
+      );
       set({ loadingProgress: 0.42 });
       logPerf('plan_candidate_fetch', fetchStart, {
         city: input.city,
@@ -176,6 +211,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         returnToStart: input.returnToStart,
         startLat: input.startLat,
         startLng: input.startLng,
+        isSaved: 0,
       };
 
       savePlan(plan, orderedStops);
@@ -191,7 +227,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const providerWarning = firstWarning(warnings);
       if (providerWarning) {
         set({ warning: providerWarning });
-      } else if (orderedStops.length < (input.stopCount || 0)) {
+      } else if (shouldWarnInsufficientStops(orderedStops.length, input)) {
         set({ warning: 'Not enough places found nearby.' });
       }
 
@@ -204,7 +240,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
       return planId;
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to create plan. Please try again.';
+      const message =
+        error instanceof Error ? error.message : 'Unable to create plan. Please try again.';
       set({ error: message });
       throw error;
     } finally {
@@ -225,8 +262,41 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     get().loadPlans();
   },
 
+  saveExistingPlan: (planId, customTitle) => {
+    const plan = get().plans.find((p) => p.id === planId);
+    if (!plan) return;
+
+    const stops = get().stopsByPlan[planId] || [];
+    const trimmedTitle = customTitle?.trim();
+
+    savePlan(
+      {
+        ...plan,
+        title: trimmedTitle ? trimmedTitle : plan.title,
+        isSaved: 1,
+      },
+      stops,
+    );
+
+    get().loadPlans();
+  },
+
+  unsavePlan: (planId) => {
+    const plan = get().plans.find((p) => p.id === planId);
+    if (!plan) return;
+
+    const stops = get().stopsByPlan[planId] || [];
+    savePlan({ ...plan, isSaved: 0 }, stops);
+    get().loadPlans();
+  },
+
   regenerate: async (planId, input) => {
-    set({ loading: true, loadingProgress: 0.08, error: undefined, warning: undefined });
+    set({
+      loading: true,
+      loadingProgress: 0.08,
+      error: undefined,
+      warning: undefined,
+    });
 
     try {
       const totalStart = perfNow();
@@ -247,15 +317,21 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const searchInterests = resolveSearchInterests(input);
 
       const fetchStart = perfNow();
-      const { places, warnings } = await provider.search(plan.city, searchInterests, origin, input.stopCount, {
-        transport: input.transport,
-        maxTravelMinutes,
-        stopCount: input.stopCount,
-        groupType: input.groupType,
-        budget: input.budget,
-        mode: 'plan',
-        cacheTtlMinutes: 60,
-      });
+      const { places, warnings } = await provider.search(
+        plan.city,
+        searchInterests,
+        origin,
+        input.stopCount,
+        {
+          transport: input.transport,
+          maxTravelMinutes,
+          stopCount: input.stopCount,
+          groupType: input.groupType,
+          budget: input.budget,
+          mode: 'plan',
+          cacheTtlMinutes: 60,
+        },
+      );
       set({ loadingProgress: 0.42 });
       logPerf('plan_regenerate_candidate_fetch', fetchStart, {
         city: plan.city,
@@ -272,7 +348,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         stops: stops.length,
       });
 
-      stops = stops.map((stop) => locked.find((lockedStop) => lockedStop.order === stop.order) || stop);
+      stops = stops.map(
+        (stop) => locked.find((lockedStop) => lockedStop.order === stop.order) || stop,
+      );
 
       const orderedStops = [...stops].sort((a, b) => a.order - b.order);
       const routingStart = perfNow();
@@ -296,6 +374,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         returnToStart: input.returnToStart ?? plan.returnToStart,
         startLat: typeof input.startLat === 'number' ? input.startLat : plan.startLat,
         startLng: typeof input.startLng === 'number' ? input.startLng : plan.startLng,
+        isSaved: plan.isSaved,
       };
 
       savePlan(nextPlan, orderedStops);
@@ -311,7 +390,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const providerWarning = firstWarning(warnings);
       if (providerWarning) {
         set({ warning: providerWarning });
-      } else if (orderedStops.length < (input.stopCount || 0)) {
+      } else if (shouldWarnInsufficientStops(orderedStops.length, input)) {
         set({ warning: 'Not enough places found nearby.' });
       }
 
@@ -373,16 +452,22 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const buster = `${planId}:${stopOrder}:${Date.now()}`;
 
       const fetchStart = perfNow();
-      const { places, warnings } = await provider.search(plan.city, searchInterests, origin, input.stopCount, {
-        transport: input.transport,
-        maxTravelMinutes,
-        stopCount: input.stopCount,
-        groupType: input.groupType,
-        budget: input.budget,
-        mode: 'reroll',
-        cacheTtlMinutes: 10,
-        cacheBuster: buster,
-      });
+      const { places, warnings } = await provider.search(
+        plan.city,
+        searchInterests,
+        origin,
+        input.stopCount,
+        {
+          transport: input.transport,
+          maxTravelMinutes,
+          stopCount: input.stopCount,
+          groupType: input.groupType,
+          budget: input.budget,
+          mode: 'reroll',
+          cacheTtlMinutes: 10,
+          cacheBuster: buster,
+        },
+      );
       logPerf('plan_reroll_candidate_fetch', fetchStart, {
         city: plan.city,
         stopOrder,
@@ -432,7 +517,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         stopOrder,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to reroll stop. Please try again.';
+      const message =
+        error instanceof Error ? error.message : 'Unable to reroll stop. Please try again.';
       set({ error: message });
       throw error;
     } finally {

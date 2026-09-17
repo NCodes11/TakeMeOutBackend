@@ -27,6 +27,26 @@ interface StopRow {
   stopType?: unknown;
   providerId?: unknown;
   reviewCount?: unknown;
+  photoUrl?: unknown;
+  photosJSON?: unknown;
+}
+
+interface PlanRow {
+  id: string;
+  title: string;
+  city: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  groupType: string;
+  transport: string;
+  budget: string;
+  preferencesJSON: string;
+  createdAt: string;
+  returnToStart?: unknown;
+  startLat?: unknown;
+  startLng?: unknown;
+  isSaved?: unknown;
 }
 
 interface TripFeedbackRow {
@@ -39,7 +59,7 @@ interface TripFeedbackRow {
   locationCity?: unknown;
   locationState?: unknown;
   stopCount?: unknown;
-  priceTier?: unknown; // <- was string; SQLite returns unknown-ish shapes sometimes
+  priceTier?: unknown;
   distancePreference?: unknown;
 }
 
@@ -51,6 +71,12 @@ interface FeatureRequestRow {
   appVersion?: unknown;
   deviceType?: unknown;
 }
+
+type PersistedPlan = Plan & {
+  startLat?: number;
+  startLng?: number;
+  isSaved?: number;
+};
 
 const coerceBoolean = (value: unknown): boolean => {
   if (typeof value === 'boolean') return value;
@@ -124,7 +150,8 @@ export const initDb = () => {
       budget TEXT NOT NULL,
       preferencesJSON TEXT NOT NULL,
       createdAt TEXT NOT NULL,
-      returnToStart INTEGER DEFAULT 0
+      returnToStart INTEGER DEFAULT 0,
+      isSaved INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS Stop (
@@ -185,9 +212,9 @@ export const initDb = () => {
     );
   `);
 
-  // Safe migrations (run every boot)
   addColumnIfMissing('Plan', 'startLat', 'REAL');
   addColumnIfMissing('Plan', 'startLng', 'REAL');
+  addColumnIfMissing('Plan', 'isSaved', 'INTEGER NOT NULL DEFAULT 0');
 
   addColumnIfMissing('Stop', 'openNow', 'INTEGER');
   addColumnIfMissing('Stop', 'rating', 'REAL');
@@ -198,14 +225,18 @@ export const initDb = () => {
   addColumnIfMissing('Stop', 'stopType', 'TEXT');
   addColumnIfMissing('Stop', 'providerId', 'TEXT');
   addColumnIfMissing('Stop', 'reviewCount', 'INTEGER');
+  addColumnIfMissing('Stop', 'photoUrl', 'TEXT');
+  addColumnIfMissing('Stop', 'photosJSON', 'TEXT');
 };
 
 export const savePlan = (plan: Plan, stops: Stop[]) => {
+  const persistedPlan = plan as PersistedPlan;
+
   db.withTransactionSync(() => {
     db.runSync(
       `INSERT OR REPLACE INTO Plan (
-        id,title,city,date,startTime,endTime,groupType,transport,pace,budget,preferencesJSON,createdAt,returnToStart,startLat,startLng
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        id,title,city,date,startTime,endTime,groupType,transport,pace,budget,preferencesJSON,createdAt,returnToStart,startLat,startLng,isSaved
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         plan.id,
         plan.title,
@@ -220,8 +251,9 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
         plan.preferencesJSON,
         plan.createdAt,
         plan.returnToStart ? 1 : 0,
-        (plan as any).startLat ?? null,
-        (plan as any).startLng ?? null,
+        persistedPlan.startLat ?? null,
+        persistedPlan.startLng ?? null,
+        persistedPlan.isSaved ? 1 : 0,
       ],
     );
 
@@ -231,8 +263,8 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
       db.runSync(
         `INSERT INTO Stop (
           id,planId,"order",name,category,lat,lng,address,startTime,endTime,durationMin,costLevel,why,locked,
-          openNow,rating,openingHoursText,priceLevel,distanceKm,etaMin,stopType,providerId,reviewCount
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          openNow,rating,openingHoursText,priceLevel,distanceKm,etaMin,stopType,providerId,reviewCount,photoUrl,photosJSON
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           s.id,
           s.planId,
@@ -248,7 +280,6 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
           s.costLevel,
           s.why,
           s.locked,
-
           typeof s.openNow === 'boolean' ? (s.openNow ? 1 : 0) : null,
           typeof s.rating === 'number' ? s.rating : null,
           s.openingHoursText ?? null,
@@ -258,6 +289,8 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
           s.stopType ?? null,
           s.providerId ?? null,
           typeof s.reviewCount === 'number' ? s.reviewCount : null,
+          s.photoUrl ?? null,
+          Array.isArray(s.photos) ? JSON.stringify(s.photos) : null,
         ],
       );
     }
@@ -266,14 +299,7 @@ export const savePlan = (plan: Plan, stops: Stop[]) => {
 
 export const getPlans = (): Plan[] =>
   db
-    .getAllSync<
-      Omit<Plan, 'returnToStart'> & {
-        pace?: unknown;
-        returnToStart: unknown;
-        startLat?: unknown;
-        startLng?: unknown;
-      }
-    >('SELECT * FROM Plan ORDER BY createdAt DESC')
+    .getAllSync<PlanRow>('SELECT * FROM Plan ORDER BY createdAt DESC')
     .map((plan) => ({
       id: plan.id,
       title: plan.title,
@@ -289,37 +315,50 @@ export const getPlans = (): Plan[] =>
       returnToStart: coerceBoolean(plan.returnToStart),
       ...(tableHasColumn('Plan', 'startLat') ? { startLat: coerceNullableNumber(plan.startLat) } : {}),
       ...(tableHasColumn('Plan', 'startLng') ? { startLng: coerceNullableNumber(plan.startLng) } : {}),
+      isSaved: tableHasColumn('Plan', 'isSaved') ? coerceNumber(plan.isSaved, 0) : 0,
     })) as Plan[];
 
 export const getPlanStops = (planId: string): Stop[] =>
   db
     .getAllSync<StopRow>('SELECT * FROM Stop WHERE planId = ? ORDER BY "order" ASC', [planId])
-    .map((stop) => ({
-      id: stop.id,
-      planId: stop.planId,
-      order: coerceNumber(stop.order),
-      name: String(stop.name ?? ''),
-      category: String(stop.category ?? ''),
-      lat: coerceNumber(stop.lat),
-      lng: coerceNumber(stop.lng),
-      address: String(stop.address ?? ''),
-      startTime: String(stop.startTime ?? ''),
-      endTime: String(stop.endTime ?? ''),
-      durationMin: coerceNumber(stop.durationMin),
-      costLevel: String(stop.costLevel ?? ''),
-      why: String(stop.why ?? ''),
-      locked: coerceNumber(stop.locked),
+    .map((stop) => {
+      let photos: Stop['photos'] = [];
 
-      openNow: stop.openNow == null ? undefined : coerceBoolean(stop.openNow),
-      rating: coerceNullableNumber(stop.rating),
-      openingHoursText: coerceNullableString(stop.openingHoursText),
-      priceLevel: coerceNullableNumber(stop.priceLevel),
-      distanceKm: coerceNullableNumber(stop.distanceKm),
-      etaMin: coerceNullableNumber(stop.etaMin),
-      stopType: coerceNullableString(stop.stopType) as Stop['stopType'],
-      providerId: coerceNullableString(stop.providerId),
-      reviewCount: coerceNullableNumber(stop.reviewCount),
-    })) as Stop[];
+      try {
+        const parsed = JSON.parse(String(stop.photosJSON ?? '[]'));
+        photos = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        photos = [];
+      }
+
+      return {
+        id: stop.id,
+        planId: stop.planId,
+        order: coerceNumber(stop.order),
+        name: String(stop.name ?? ''),
+        category: String(stop.category ?? ''),
+        lat: coerceNumber(stop.lat),
+        lng: coerceNumber(stop.lng),
+        address: String(stop.address ?? ''),
+        startTime: String(stop.startTime ?? ''),
+        endTime: String(stop.endTime ?? ''),
+        durationMin: coerceNumber(stop.durationMin),
+        costLevel: String(stop.costLevel ?? ''),
+        why: String(stop.why ?? ''),
+        locked: coerceNumber(stop.locked),
+        openNow: stop.openNow == null ? undefined : coerceBoolean(stop.openNow),
+        rating: coerceNullableNumber(stop.rating),
+        openingHoursText: coerceNullableString(stop.openingHoursText),
+        priceLevel: coerceNullableNumber(stop.priceLevel),
+        distanceKm: coerceNullableNumber(stop.distanceKm),
+        etaMin: coerceNullableNumber(stop.etaMin),
+        stopType: coerceNullableString(stop.stopType) as Stop['stopType'],
+        providerId: coerceNullableString(stop.providerId),
+        reviewCount: coerceNullableNumber(stop.reviewCount),
+        photoUrl: coerceNullableString(stop.photoUrl),
+        photos,
+      };
+    }) as Stop[];
 
 export const saveChecklist = (items: ChecklistItem[]) => {
   db.withTransactionSync(() => {
@@ -352,7 +391,7 @@ export const saveTripFeedback = (entry: TripFeedback) => {
       entry.locationCity ?? null,
       entry.locationState ?? null,
       entry.stopCount,
-      entry.priceTier, // stored as TEXT
+      entry.priceTier,
       typeof entry.distancePreference === 'number' ? entry.distancePreference : null,
     ],
   );
@@ -383,7 +422,7 @@ export const getTripFeedback = (): TripFeedback[] =>
     locationCity: coerceNullableString(row.locationCity),
     locationState: coerceNullableString(row.locationState),
     stopCount: coerceNumber(row.stopCount),
-    priceTier: coerceBudgetType(row.priceTier, '$$'), // ✅ FIX: always return BudgetType
+    priceTier: coerceBudgetType(row.priceTier, '$$'),
     distancePreference: coerceNullableNumber(row.distancePreference),
   }));
 

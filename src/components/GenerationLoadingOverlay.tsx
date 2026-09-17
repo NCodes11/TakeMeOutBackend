@@ -551,7 +551,7 @@ export function GenerationLoadingOverlay({ visible, progress }: Props) {
           </View>
 
           <Text variant="titleMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
-            Filling Your Day
+            Making Your Day
           </Text>
           <Text variant="bodySmall" style={[styles.subtitle, { color: theme.colors.onSurfaceVariant }]}>
             Finding strong nearby stops and mapping the route.

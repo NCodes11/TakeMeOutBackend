@@ -78,7 +78,23 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'car_rental',
       'store',
     ],
-    positiveKeywords: ['park', 'trail', 'nature', 'garden', 'lake', 'river', 'beach', 'preserve', 'boardwalk', 'viewpoint'],
+    positiveKeywords: [
+      'park',
+      'trail',
+      'nature',
+      'garden',
+      'lake',
+      'river',
+      'beach',
+      'preserve',
+      'boardwalk',
+      'viewpoint',
+      'botanical',
+      'arboretum',
+      'greenway',
+      'waterfront',
+      'pier',
+    ],
     denyKeywords: ['walmart', 'target', 'costco', 'outlet', 'mall', 'pharmacy', ...GLOBAL_DENY_KEYWORDS],
   },
 
@@ -104,7 +120,7 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'nature_reserve',
       'beach',
     ],
-    positiveKeywords: ['mall', 'outlet', 'plaza', 'shopping', 'store', 'boutique'],
+    positiveKeywords: ['mall', 'outlet', 'plaza', 'shopping', 'store', 'boutique', 'marketplace'],
     denyKeywords: ['park', 'trail', 'preserve', 'nature', 'beach', ...GLOBAL_DENY_KEYWORDS],
   },
 
@@ -119,8 +135,24 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'campground',
       'gas_station',
     ],
-    positiveKeywords: ['restaurant', 'grill', 'kitchen', 'diner', 'eatery', 'bistro', 'steakhouse', 'sushi', 'pizza'],
-    denyKeywords: ['walmart', 'target', 'costco', 'mall', 'gas', 'station', ...GLOBAL_DENY_KEYWORDS],
+    positiveKeywords: [
+      'restaurant',
+      'grill',
+      'kitchen',
+      'diner',
+      'eatery',
+      'bistro',
+      'steakhouse',
+      'sushi',
+      'pizza',
+      'tacos',
+      'ramen',
+      'bbq',
+      'barbecue',
+      'brunch',
+      'pasta',
+    ],
+    denyKeywords: ['walmart', 'target', 'costco', 'mall', 'gas station', ...GLOBAL_DENY_KEYWORDS],
   },
 
   coffee: {
@@ -135,8 +167,18 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'gas_station',
       'pharmacy',
     ],
-    positiveKeywords: ['coffee', 'cafe', 'espresso', 'latte', 'roastery', 'tea'],
-    denyKeywords: ['walmart', 'target', 'outlet', 'pharmacy', 'gas', ...GLOBAL_DENY_KEYWORDS],
+    positiveKeywords: [
+      'coffee',
+      'cafe',
+      'espresso',
+      'latte',
+      'roastery',
+      'tea',
+      'matcha',
+      'coffeehouse',
+      'bakery',
+    ],
+    denyKeywords: ['walmart', 'target', 'outlet', 'pharmacy', 'gas station', ...GLOBAL_DENY_KEYWORDS],
   },
 
   bar: {
@@ -147,9 +189,9 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'department_store',
       'store',
       'park',
-      'restaurant', // helps avoid generic restaurants getting labeled as "bar"
+      'restaurant',
     ],
-    positiveKeywords: ['bar', 'pub', 'taproom', 'cocktail', 'brewery', 'speakeasy'],
+    positiveKeywords: ['bar', 'pub', 'taproom', 'cocktail', 'brewery', 'speakeasy', 'wine bar', 'lounge'],
     denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
   },
 
@@ -164,12 +206,23 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'gas_station',
       'pharmacy',
     ],
-    positiveKeywords: ['dessert', 'ice cream', 'gelato', 'bakery', 'pastry', 'donut', 'cake', 'cookies'],
-    denyKeywords: ['walmart', 'target', 'gas', 'station', ...GLOBAL_DENY_KEYWORDS],
+    positiveKeywords: [
+      'dessert',
+      'ice cream',
+      'gelato',
+      'bakery',
+      'pastry',
+      'donut',
+      'cake',
+      'cookies',
+      'cupcake',
+      'chocolate',
+      'froyo',
+    ],
+    denyKeywords: ['walmart', 'target', 'gas station', ...GLOBAL_DENY_KEYWORDS],
   },
 
   activity: {
-    // IMPORTANT: movie_theater intentionally not allowed.
     allowTypes: [
       'bowling_alley',
       'arcade',
@@ -189,7 +242,20 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'pharmacy',
       'store',
     ],
-    positiveKeywords: ['arcade', 'bowling', 'mini golf', 'escape room', 'go kart', 'fun', 'activity', 'laser tag'],
+    positiveKeywords: [
+      'arcade',
+      'bowling',
+      'mini golf',
+      'escape room',
+      'go kart',
+      'fun',
+      'activity',
+      'laser tag',
+      'axe throwing',
+      'trampoline',
+      'amusement',
+      'karaoke',
+    ],
     denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
   },
 
@@ -203,7 +269,18 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'pharmacy',
       'store',
     ],
-    positiveKeywords: ['museum', 'gallery', 'exhibit', 'arts', 'cultural', 'theater', 'theatre'],
+    positiveKeywords: [
+      'museum',
+      'gallery',
+      'exhibit',
+      'arts',
+      'cultural',
+      'theater',
+      'theatre',
+      'art center',
+      'installation',
+      'contemporary art',
+    ],
     denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
   },
 
@@ -221,14 +298,26 @@ export const CATEGORY_POLICIES: Record<StopType, CategoryPolicy> = {
       'gas_station',
       'store',
     ],
-    positiveKeywords: ['attraction', 'landmark', 'zoo', 'aquarium', 'museum', 'theme park', 'water park', 'observation', 'visitor center'],
+    positiveKeywords: [
+      'attraction',
+      'landmark',
+      'zoo',
+      'aquarium',
+      'museum',
+      'theme park',
+      'water park',
+      'observation',
+      'visitor center',
+      'monument',
+      'historic site',
+      'lookout',
+    ],
     denyKeywords: ['walmart', 'target', 'market', 'supercenter', ...GLOBAL_DENY_KEYWORDS],
   },
 };
 
 const containsAny = (haystack: string, needles: string[]) => needles.some((needle) => haystack.includes(needle));
 const overlaps = (values: string[], candidates: string[]) => values.some((value) => candidates.includes(value));
-
 const normalizeTypes = (types?: string[]) => (types || []).map((t) => String(t).trim().toLowerCase()).filter(Boolean);
 
 export const evaluateCategoryCandidate = (stopType: StopType, place: CategoryEvalInput): CategoryEvalResult => {
@@ -237,11 +326,9 @@ export const evaluateCategoryCandidate = (stopType: StopType, place: CategoryEva
   const types = normalizeTypes(place.types);
   const text = `${place.name || ''} ${place.address || ''}`.toLowerCase();
 
-  // 1) Global hard rejects
   const globalDenyType = types.some((t) => GLOBAL_DENY_TYPES.has(t));
   const globalDenyKeyword = containsAny(text, GLOBAL_DENY_KEYWORDS);
 
-  // 2) Per-category type + keyword signals
   const hasAllowType = overlaps(types, policy.allowTypes);
   const hasDenyType = overlaps(types, policy.denyTypes);
 
@@ -252,33 +339,35 @@ export const evaluateCategoryCandidate = (stopType: StopType, place: CategoryEva
 
   if (globalDenyType) reasons.push('global_deny_type_match');
   if (globalDenyKeyword) reasons.push('global_deny_keyword_match');
-
   if (hasDenyType) reasons.push('deny_type_match');
   if (hasDenyKeyword) reasons.push('deny_keyword_match');
+  if (hasAllowType) reasons.push('allow_type_match');
+  if (hasPositiveKeyword) reasons.push('positive_keyword_match');
+  if (types.length > 0 && !hasAllowType) reasons.push('missing_allow_type');
 
-  // If we have types, demand at least one allow-type (keywords are fallback)
-  const hasAnyTypes = types.length > 0;
-  if (hasAnyTypes && !hasAllowType) reasons.push('missing_allow_type');
-
-  // Scoring (simple + robust)
   let score = 0;
+
   if (hasAllowType) score += 4;
-  if (!hasAnyTypes && hasPositiveKeyword) score += 2; // keyword fallback only when types are missing
-  if (hasDenyKeyword) score -= 6;
-  if (hasDenyType) score -= 3;
+  if (hasPositiveKeyword) score += 3;
+
+  if (types.length === 0 && hasPositiveKeyword) score += 1;
+
+  if (hasDenyType) score -= 4;
+  if (hasDenyKeyword) score -= 5;
   if (globalDenyType || globalDenyKeyword) score -= 10;
 
-  const hardRejected =
-    globalDenyType ||
-    globalDenyKeyword ||
-    hasDenyType ||
-    hasDenyKeyword ||
-    (hasAnyTypes && !hasAllowType);
+  // Soft penalty instead of hard reject when provider types don't line up perfectly.
+  if (types.length > 0 && !hasAllowType) score -= 1;
 
-  // If we had no types, allow keyword-only acceptance with a higher threshold.
-  const threshold = hasAnyTypes ? 2 : 3;
+  const hardRejected = globalDenyType || globalDenyKeyword;
 
-  const accepted = !hardRejected && score >= threshold;
+  // Still reject very strong deny signals unless there's also very strong evidence.
+  const strongDenyRejected = !hardRejected && (score <= -3) && (hasDenyType || hasDenyKeyword);
+
+  // More permissive thresholds so valid places with imperfect tags survive.
+  const threshold = types.length > 0 ? 2 : 3;
+
+  const accepted = !hardRejected && !strongDenyRejected && score >= threshold;
 
   if (!accepted) reasons.push('rejected');
 

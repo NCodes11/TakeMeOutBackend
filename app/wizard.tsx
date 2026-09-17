@@ -1,28 +1,38 @@
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
-import {
-  Button,
-  Card,
-  Chip,
-  Menu,
-  SegmentedButtons,
-  Switch,
-  Text,
-  TextInput,
-  useTheme,
-} from 'react-native-paper';
+import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { GenerationLoadingOverlay } from '@/components/GenerationLoadingOverlay';
-import { AppCard, AppScreen, ChoiceButtonGroup, PrimaryButton } from '@/components/ui';
+import {
+  AppScreen,
+  Chip,
+  ChipGroup,
+  Dock,
+  Notice,
+  OptionSheet,
+  PrimaryButton,
+  SectionLabel,
+  Segmented,
+  Stepper,
+  SwitchRow,
+  TimeText,
+  UnderlineInput,
+  UnderlineValue,
+  ValueRow,
+} from '@/components/ui';
 import { GROUP_TYPE_OPTIONS } from '@/constants/groupTypes';
 import { STOP_TYPE_OPTIONS, stopTypeLabel } from '@/constants/stopTypes';
 import { useLocation } from '@/context/LocationContext';
 import { useTimeFormat } from '@/context/PreferencesContext';
 import { usePlanStore } from '@/store/usePlanStore';
 import { BudgetType, StopType, TransportType, WizardInput } from '@/types/models';
-import { spacing } from '@/theme/appTheme';
-import { END_TIME_OPTIONS, START_TIME_OPTIONS, formatTimeDisplay, snapEndTimeAfterStart } from '@/utils/time';
+import { fonts, spacing, useAppPalette } from '@/theme/appTheme';
+import {
+  END_TIME_OPTIONS,
+  START_TIME_OPTIONS,
+  formatTimeDisplay,
+  snapEndTimeAfterStart,
+} from '@/utils/time';
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
@@ -38,14 +48,13 @@ const isValidDateInput = (value: string) => {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return false;
 
-  return (
-    date.getFullYear() === year &&
-    date.getMonth() + 1 === month &&
-    date.getDate() === day
-  );
+  return date.getFullYear() === year && date.getMonth() + 1 === month && date.getDate() === day;
 };
 
-const defaultInput = (city: string): WizardInput => ({
+const defaultInput = (
+  city: string,
+  startLocationMode: WizardInput['startLocationMode'] = 'my-location',
+): WizardInput => ({
   city,
   date: new Date().toISOString().slice(0, 10),
   startTime: '09:00',
@@ -54,32 +63,62 @@ const defaultInput = (city: string): WizardInput => ({
   adults: 2,
   kids: 0,
   kidAges: [],
-  transport: 'drive',
+  transport: 'walk',
   budget: '$$',
+  pace: 'standard',
   feelingLucky: false,
   preferences: {
-    interests: [],
+    interests: ['coffee', 'restaurant', 'attraction', 'shopping'],
     avoid: [],
     mustInclude: '',
     maxTravelMinutes: DEFAULT_TRAVEL_MINUTES,
     accessibleFriendly: false,
   },
-  startLocationMode: 'my-location',
-  startAddress: '',
+  startLocationMode,
+  startAddress: startLocationMode === 'custom' ? city : '',
   returnToStart: true,
-  stopCount: 3,
+  stopCount: 4,
 });
 
+const TRANSPORT_OPTIONS = [
+  { value: 'walk', label: 'Walk' },
+  { value: 'drive', label: 'Drive' },
+] as const;
+
+const BUDGET_OPTIONS = [
+  { value: '$', label: '$' },
+  { value: '$$', label: '$$' },
+  { value: '$$$', label: '$$$' },
+] as const;
+
+const PACE_OPTIONS = [
+  { value: 'relaxed', label: 'Relaxed' },
+  { value: 'standard', label: 'Standard' },
+  { value: 'packed', label: 'Packed' },
+] as const;
+
 export default function WizardScreen() {
-  const theme = useTheme();
-  const params = useLocalSearchParams<{ city?: string; originLat?: string; originLng?: string }>();
+  const p = useAppPalette();
+  const params = useLocalSearchParams<{
+    city?: string;
+    locationMode?: 'live' | 'manual';
+    originLat?: string;
+    originLng?: string;
+    capture?: string;
+  }>();
   const location = useLocation();
   const timeFormat = useTimeFormat();
 
-  const [input, setInput] = useState<WizardInput>(() => defaultInput(params.city || ''));
+  const initialLocationMode =
+    params.locationMode === 'manual' || location.mode === 'manual' ? 'custom' : 'my-location';
+
+  const [input, setInput] = useState<WizardInput>(() =>
+    defaultInput(params.city || '', initialLocationMode),
+  );
   const [maxTravel, setMaxTravel] = useState<number>(DEFAULT_TRAVEL_MINUTES);
-  const [startMenuVisible, setStartMenuVisible] = useState(false);
-  const [endMenuVisible, setEndMenuVisible] = useState(false);
+  const [startSheetVisible, setStartSheetVisible] = useState(false);
+  const [endSheetVisible, setEndSheetVisible] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const createPlan = usePlanStore((s) => s.createPlan);
   const loading = usePlanStore((s) => s.loading);
@@ -100,30 +139,57 @@ export default function WizardScreen() {
     }));
   };
 
+  const updateCity = (value: string) => {
+    setInput((prev) => ({
+      ...prev,
+      city: value,
+      startLocationMode: 'custom',
+      startAddress: value,
+      startLat: undefined,
+      startLng: undefined,
+    }));
+  };
+
   useEffect(() => {
     const lat = params.originLat ? Number(params.originLat) : undefined;
     const lng = params.originLng ? Number(params.originLng) : undefined;
     const hasLat = typeof lat === 'number' && Number.isFinite(lat);
     const hasLng = typeof lng === 'number' && Number.isFinite(lng);
+    const paramStartLocationMode =
+      params.locationMode === 'manual'
+        ? 'custom'
+        : params.locationMode === 'live'
+          ? 'my-location'
+          : undefined;
 
     setInput((prev) => ({
       ...prev,
       city: prev.city || params.city || prev.city,
       startLat: hasLat ? lat : prev.startLat,
       startLng: hasLng ? lng : prev.startLng,
+      startLocationMode: paramStartLocationMode || prev.startLocationMode,
+      startAddress:
+        paramStartLocationMode === 'custom'
+          ? params.city || prev.startAddress || prev.city
+          : prev.startAddress,
     }));
-  }, [params.city, params.originLat, params.originLng]);
+  }, [params.city, params.locationMode, params.originLat, params.originLng]);
 
   useEffect(() => {
     if (!location.coords) return;
+    if (location.mode !== 'live') return;
 
     setInput((prev) => ({
-      ...prev,
-      city: prev.city || location.placeLabel || prev.city,
-      startLat: location.coords?.latitude ?? prev.startLat,
-      startLng: location.coords?.longitude ?? prev.startLng,
+      ...(prev.startLocationMode === 'custom'
+        ? prev
+        : {
+            ...prev,
+            city: prev.city || location.placeLabel || prev.city,
+            startLat: location.coords?.latitude ?? prev.startLat,
+            startLng: location.coords?.longitude ?? prev.startLng,
+          }),
     }));
-  }, [location.coords, location.placeLabel]);
+  }, [location.coords, location.mode, location.placeLabel]);
 
   useEffect(() => {
     const value =
@@ -143,7 +209,7 @@ export default function WizardScreen() {
       if (__DEV__) {
         console.log(
           '[plan] selected_stop_types',
-          interests.map((type) => stopTypeLabel(type as StopType))
+          interests.map((type) => stopTypeLabel(type as StopType)),
         );
       }
 
@@ -158,11 +224,28 @@ export default function WizardScreen() {
   };
 
   const sliderLabel = useMemo(() => {
-    if (maxTravel <= 10) return `${maxTravel} min (tight)`;
-    if (maxTravel <= 25) return `${maxTravel} min (reasonable)`;
-    if (maxTravel <= 45) return `${maxTravel} min (flexible)`;
-    return `${maxTravel} min (wide)`;
+    if (maxTravel <= 10) return 'tight';
+    if (maxTravel <= 25) return 'reasonable';
+    if (maxTravel <= 45) return 'flexible';
+    return 'wide';
   }, [maxTravel]);
+
+  const startTimeOptions = useMemo(
+    () =>
+      START_TIME_OPTIONS.map((t) => ({
+        value: t,
+        label: formatTimeDisplay(t, timeFormat),
+      })),
+    [timeFormat],
+  );
+  const endTimeOptions = useMemo(
+    () =>
+      END_TIME_OPTIONS.map((t) => ({
+        value: t,
+        label: formatTimeDisplay(t, timeFormat),
+      })),
+    [timeFormat],
+  );
 
   const onSelectStartTime = (value: string) => {
     setInput((prev) => ({
@@ -170,7 +253,7 @@ export default function WizardScreen() {
       startTime: value,
       endTime: snapEndTimeAfterStart(value, prev.endTime),
     }));
-    setStartMenuVisible(false);
+    setStartSheetVisible(false);
   };
 
   const onSelectEndTime = (value: string) => {
@@ -178,7 +261,7 @@ export default function WizardScreen() {
       ...prev,
       endTime: snapEndTimeAfterStart(prev.startTime, value),
     }));
-    setEndMenuVisible(false);
+    setEndSheetVisible(false);
   };
 
   const hasSelectedStopTypes = input.preferences.interests.length > 0;
@@ -192,13 +275,27 @@ export default function WizardScreen() {
     if (isSubmitDisabled) return;
 
     try {
-      const fresh = await location
-        .refreshLocation()
-        .catch(() => ({ coords: location.coords, placeLabel: location.placeLabel }));
+      setSubmitError(null);
 
-      const lat = fresh.coords?.latitude ?? input.startLat;
-      const lng = fresh.coords?.longitude ?? input.startLng;
-      const city = input.city.trim() || fresh.placeLabel || '';
+      let lat = input.startLat;
+      let lng = input.startLng;
+      let city = input.city.trim();
+
+      if (input.startLocationMode === 'custom') {
+        const fresh = await location.setManualLocation(city);
+        lat = fresh.coords.latitude;
+        lng = fresh.coords.longitude;
+        city = fresh.placeLabel;
+      } else {
+        const fresh = await location.refreshLocation().catch(() => ({
+          coords: location.coords,
+          placeLabel: location.placeLabel,
+        }));
+
+        lat = fresh.coords?.latitude ?? lat;
+        lng = fresh.coords?.longitude ?? lng;
+        city = city || fresh.placeLabel || '';
+      }
 
       const payload: WizardInput = {
         ...input,
@@ -206,6 +303,7 @@ export default function WizardScreen() {
         endTime: snapEndTimeAfterStart(input.startTime, input.endTime),
         startLat: lat,
         startLng: lng,
+        startAddress: input.startLocationMode === 'custom' ? city : input.startAddress,
         preferences: {
           ...input.preferences,
           maxTravelMinutes: clamp(maxTravel, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES),
@@ -234,358 +332,319 @@ export default function WizardScreen() {
       router.push(`/generated/${id}`);
     } catch (submitError) {
       console.error('[plan] wizard_submit_failed', submitError);
+      setSubmitError(
+        submitError instanceof Error ? submitError.message : 'Unable to generate your plan.',
+      );
     }
   };
 
   return (
     <>
-    <AppScreen title="Plan your day">
-      <Stack.Screen
-        options={{
-          title: 'TAKE ME OUT',
-          headerBackTitle: 'Home',
-        }}
-      />
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <AppScreen
+          title="Plan your day"
+          subtitle="Four things to set. Everything else we'll figure out."
+          dockSpace
+          initialScrollY={__DEV__ && params.capture === 'settings' ? 720 : undefined}
+        >
+          <SectionLabel first>Where &amp; when</SectionLabel>
 
-      <ScrollView contentContainerStyle={styles.container}>
-        <AppCard>
-          <Card.Content style={styles.section}>
-            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
-              Location
-            </Text>
+          <UnderlineInput
+            label="City"
+            value={input.city}
+            onChangeText={updateCity}
+            placeholder="Where are you starting?"
+            autoCapitalize="words"
+            autoCorrect={false}
+          />
 
-            <TextInput
-              label="City"
-              value={input.city}
-              onChangeText={(value) => updateInput({ city: value })}
-              mode="outlined"
-            />
-
-            <TextInput
+          <View style={styles.tripleRow}>
+            <UnderlineInput
               label="Date"
               value={input.date}
               onChangeText={(value) => updateInput({ date: value })}
-              mode="outlined"
               placeholder="YYYY-MM-DD"
+              keyboardType="numbers-and-punctuation"
               error={input.date.length > 0 && !hasValidDate}
+              containerStyle={styles.dateField}
+              style={styles.monoInput}
             />
+            <UnderlineValue
+              label="Start"
+              value={formatTimeDisplay(input.startTime, timeFormat)}
+              onPress={() => setStartSheetVisible(true)}
+              time
+              style={styles.timeField}
+            />
+            <UnderlineValue
+              label="End"
+              value={formatTimeDisplay(input.endTime, timeFormat)}
+              onPress={() => setEndSheetVisible(true)}
+              time
+              style={styles.timeField}
+            />
+          </View>
 
-            {input.date.length > 0 && !hasValidDate ? (
-              <Text variant="bodySmall" style={{ color: theme.colors.error }}>
-                Enter a valid date in YYYY-MM-DD format.
-              </Text>
-            ) : null}
-          </Card.Content>
-        </AppCard>
-
-        <AppCard>
-          <Card.Content style={styles.section}>
-            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
-              Time
+          {input.date.length > 0 && !hasValidDate ? (
+            <Text style={[styles.fieldError, { color: p.danger }]}>
+              Enter a valid date in YYYY-MM-DD format.
             </Text>
+          ) : null}
 
-            <View style={styles.row}>
-              <Menu
-                visible={startMenuVisible}
-                onDismiss={() => setStartMenuVisible(false)}
-                anchor={
-                  <Button mode="outlined" onPress={() => setStartMenuVisible(true)} style={styles.timeButton}>
-                    Start: {formatTimeDisplay(input.startTime, timeFormat)}
-                  </Button>
-                }
-              >
-                <ScrollView style={styles.timeMenuScroll}>
-                  {START_TIME_OPTIONS.map((option) => (
-                    <Menu.Item
-                      key={option}
-                      onPress={() => onSelectStartTime(option)}
-                      title={formatTimeDisplay(option, timeFormat)}
-                    />
-                  ))}
-                </ScrollView>
-              </Menu>
+          <SectionLabel>Who &amp; how</SectionLabel>
 
-              <Menu
-                visible={endMenuVisible}
-                onDismiss={() => setEndMenuVisible(false)}
-                anchor={
-                  <Button mode="outlined" onPress={() => setEndMenuVisible(true)} style={styles.timeButton}>
-                    End: {formatTimeDisplay(input.endTime, timeFormat)}
-                  </Button>
-                }
-              >
-                <ScrollView style={styles.timeMenuScroll}>
-                  {END_TIME_OPTIONS.map((option) => (
-                    <Menu.Item
-                      key={option}
-                      onPress={() => onSelectEndTime(option)}
-                      title={formatTimeDisplay(option, timeFormat)}
-                    />
-                  ))}
-                </ScrollView>
-              </Menu>
-            </View>
-          </Card.Content>
-        </AppCard>
+          <ChipGroup
+            options={GROUP_TYPE_OPTIONS}
+            value={input.groupType}
+            onChange={(value) => updateInput({ groupType: value })}
+          />
 
-        <AppCard>
-          <Card.Content style={styles.section}>
-            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
-              Preferences
-            </Text>
+          <View style={styles.segRow}>
+            <Segmented
+              options={TRANSPORT_OPTIONS}
+              value={input.transport}
+              onChange={(value) => updateInput({ transport: value as TransportType })}
+              style={styles.segTransport}
+            />
+            <Segmented
+              options={BUDGET_OPTIONS}
+              value={input.budget}
+              onChange={(value) => updateInput({ budget: value as BudgetType })}
+              style={styles.segBudget}
+            />
+          </View>
 
-            <View style={styles.fieldGroup}>
-              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
-                Group type
-              </Text>
-              <ChoiceButtonGroup
-                value={input.groupType}
-                onValueChange={(value) => updateInput({ groupType: value })}
-                options={GROUP_TYPE_OPTIONS}
-              />
-            </View>
+          <Segmented
+            options={PACE_OPTIONS}
+            value={input.pace || 'standard'}
+            onChange={(value) => updateInput({ pace: value })}
+            style={styles.segPace}
+          />
 
-            <View style={styles.fieldGroup}>
-              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
-                Transport
-              </Text>
-              <SegmentedButtons
-                value={input.transport}
-                onValueChange={(value) => updateInput({ transport: value as TransportType })}
-                buttons={[
-                  { value: 'walk', label: 'Walk' },
-                  { value: 'drive', label: 'Drive' },
-                ]}
-              />
-            </View>
+          <SectionLabel>Stops</SectionLabel>
 
-            <View style={styles.fieldGroup}>
-              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
-                Budget
-              </Text>
-              <SegmentedButtons
-                value={input.budget}
-                onValueChange={(value) => updateInput({ budget: value as BudgetType })}
-                buttons={[
-                  { value: '$', label: '$' },
-                  { value: '$$', label: '$$' },
-                  { value: '$$$', label: '$$$' },
-                ]}
-              />
-            </View>
-          </Card.Content>
-        </AppCard>
+          <SwitchRow
+            label="Feeling lucky"
+            hint="Let us pick the mix of places"
+            value={input.feelingLucky}
+            onValueChange={(value) => updateInput({ feelingLucky: value })}
+          />
 
-        <AppCard>
-          <Card.Content style={styles.section}>
-            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
-              Stops
-            </Text>
-
-            <View style={styles.switchRow}>
-              <Text style={{ color: theme.colors.onSurface }}>Feeling Lucky</Text>
-              <Switch
-                value={input.feelingLucky}
-                onValueChange={(value) => updateInput({ feelingLucky: value })}
-              />
-            </View>
-
-            {!input.feelingLucky ? (
-              <>
-                <View style={styles.chips}>
-                  {STOP_TYPE_OPTIONS.map((option) => (
-                    <Chip
-                      key={option.id}
-                      selected={input.preferences.interests.includes(option.id)}
-                      onPress={() => toggleInterest(option.id)}
-                    >
-                      {option.label}
-                    </Chip>
-                  ))}
-                </View>
-
-                {!hasSelectedStopTypes ? (
-                  <Text variant="bodySmall" style={[styles.emptyHint, { color: theme.colors.error }]}>
-                    Select at least one stop type or enable Feeling Lucky.
-                  </Text>
-                ) : null}
-              </>
-            ) : (
-              <Text variant="bodySmall" style={[styles.helperText, { color: theme.colors.onSurfaceVariant }]}>
-                Feeling Lucky will choose the stop types for you.
-              </Text>
-            )}
-
-            <View style={styles.fieldGroup}>
-              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
-                Number of stops
-              </Text>
+          {!input.feelingLucky ? (
+            <>
               <View style={styles.chips}>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
+                {STOP_TYPE_OPTIONS.map((option) => (
                   <Chip
-                    key={count}
-                    selected={input.stopCount === count}
-                    onPress={() => updateInput({ stopCount: count })}
-                  >
-                    {count}
-                  </Chip>
+                    key={option.id}
+                    label={option.label}
+                    selected={input.preferences.interests.includes(option.id)}
+                    onPress={() => toggleInterest(option.id)}
+                  />
                 ))}
               </View>
-            </View>
-          </Card.Content>
-        </AppCard>
 
-        <AppCard>
-          <Card.Content style={styles.section}>
-            <Text variant="titleMedium" style={{ color: theme.colors.onSurface }}>
-              Trip settings
-            </Text>
-
-            <TextInput
-              label="Avoid list (comma separated)"
-              value={input.preferences.avoid.join(',')}
-              onChangeText={(value) =>
-                updatePreferences({
-                  avoid: value
-                    .split(',')
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                })
-              }
-              mode="outlined"
-            />
-
-            <TextInput
-              label="Must include"
-              value={input.preferences.mustInclude}
-              onChangeText={(value) => updatePreferences({ mustInclude: value })}
-              mode="outlined"
-            />
-
-            <View style={styles.fieldGroup}>
-              <Text variant="labelLarge" style={[styles.fieldLabel, { color: theme.colors.onSurface }]}>
-                Max travel time between stops
-              </Text>
-              <Text variant="bodySmall" style={[styles.helperText, { color: theme.colors.onSurfaceVariant }]}>
-                {sliderLabel}
-              </Text>
-
-              <View style={styles.sliderRow}>
-                <Text style={[styles.sliderMin, { color: theme.colors.onSurfaceVariant }]}>
-                  {MIN_TRAVEL_MINUTES}
+              {!hasSelectedStopTypes ? (
+                <Text style={[styles.fieldError, { color: p.danger }]}>
+                  Select at least one stop type or turn on Feeling lucky.
                 </Text>
-                <Slider
-                  style={styles.slider}
-                  minimumValue={MIN_TRAVEL_MINUTES}
-                  maximumValue={MAX_TRAVEL_MINUTES}
-                  step={5}
-                  value={clamp(maxTravel, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES)}
-                  onValueChange={(value) => setMaxTravel(value)}
-                  onSlidingComplete={(value) => {
-                    const bounded = clamp(value, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES);
-                    setMaxTravel(bounded);
-                    updatePreferences({
-                      maxTravelMinutes: bounded,
-                    });
-                  }}
-                  minimumTrackTintColor={theme.colors.primary}
-                  maximumTrackTintColor={theme.colors.onSurfaceVariant}
-                  thumbTintColor={theme.colors.primary}
-                />
-                <Text style={[styles.sliderMax, { color: theme.colors.onSurfaceVariant }]}>
-                  {MAX_TRAVEL_MINUTES}
-                </Text>
-              </View>
+              ) : null}
+            </>
+          ) : null}
+
+          <ValueRow label="Number of stops" divider>
+            <Stepper
+              value={input.stopCount}
+              min={1}
+              max={8}
+              onChange={(value) => updateInput({ stopCount: value })}
+            />
+          </ValueRow>
+
+          <SectionLabel>Trip settings</SectionLabel>
+
+          <UnderlineInput
+            label="Must include"
+            placeholder="A place or type you don't want to miss"
+            value={input.preferences.mustInclude}
+            onChangeText={(value) => updatePreferences({ mustInclude: value })}
+          />
+
+          <UnderlineInput
+            label="Avoid"
+            placeholder="Comma separated, e.g. chains, seafood"
+            value={input.preferences.avoid.join(', ')}
+            onChangeText={(value) =>
+              updatePreferences({
+                avoid: value
+                  .split(',')
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+              })
+            }
+            containerStyle={styles.fieldGap}
+          />
+
+          <View style={[styles.sliderBlock, { borderBottomColor: p.line }]}>
+            <View style={styles.sliderHeader}>
+              <Text style={[styles.rowLabel, { color: p.textHigh }]}>Max travel between stops</Text>
+              <TimeText style={styles.sliderValue}>
+                {maxTravel} min <Text style={{ color: p.textLow }}>· {sliderLabel}</Text>
+              </TimeText>
             </View>
+            <Slider
+              style={styles.slider}
+              minimumValue={MIN_TRAVEL_MINUTES}
+              maximumValue={MAX_TRAVEL_MINUTES}
+              step={5}
+              value={clamp(maxTravel, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES)}
+              onValueChange={(value) => setMaxTravel(value)}
+              onSlidingComplete={(value) => {
+                const bounded = clamp(value, MIN_TRAVEL_MINUTES, MAX_TRAVEL_MINUTES);
+                setMaxTravel(bounded);
+                updatePreferences({ maxTravelMinutes: bounded });
+              }}
+              minimumTrackTintColor={p.violetFill}
+              maximumTrackTintColor={p.surfacePressed}
+              thumbTintColor={p.violetFill}
+              accessibilityLabel="Max travel time between stops"
+            />
+          </View>
 
-            <View style={styles.switchRow}>
-              <Text style={{ color: theme.colors.onSurface }}>Accessible-friendly</Text>
-              <Switch
-                value={input.preferences.accessibleFriendly}
-                onValueChange={(value) =>
-                  updatePreferences({
-                    accessibleFriendly: value,
-                  })
-                }
-              />
+          <SwitchRow
+            label="Accessible-friendly"
+            hint="Prefer step-free places and routes"
+            value={input.preferences.accessibleFriendly}
+            onValueChange={(value) => updatePreferences({ accessibleFriendly: value })}
+          />
+          <SwitchRow
+            label="Return to start"
+            value={input.returnToStart}
+            onValueChange={(value) => updateInput({ returnToStart: value })}
+            divider
+          />
+
+          {error || submitError ? (
+            <View style={styles.errorWrap}>
+              <Notice title="Couldn't build your day">{error || submitError}</Notice>
             </View>
+          ) : null}
+        </AppScreen>
 
-            <View style={styles.switchRow}>
-              <Text style={{ color: theme.colors.onSurface }}>Return to start</Text>
-              <Switch
-                value={input.returnToStart}
-                onValueChange={(value) => updateInput({ returnToStart: value })}
-              />
-            </View>
-          </Card.Content>
-        </AppCard>
+        <Dock>
+          <PrimaryButton loading={loading} disabled={isSubmitDisabled} onPress={handleGenerate}>
+            Generate day plan
+          </PrimaryButton>
+          <Text style={[styles.dockHint, { color: p.textLow }]}>Takes about 6 seconds</Text>
+        </Dock>
+      </KeyboardAvoidingView>
 
-        <PrimaryButton loading={loading} disabled={isSubmitDisabled} onPress={handleGenerate}>
-          Generate Day Plan
-        </PrimaryButton>
+      <OptionSheet
+        visible={startSheetVisible}
+        title="Start time"
+        options={startTimeOptions}
+        value={input.startTime}
+        onSelect={onSelectStartTime}
+        onDismiss={() => setStartSheetVisible(false)}
+        mono
+      />
+      <OptionSheet
+        visible={endSheetVisible}
+        title="End time"
+        options={endTimeOptions}
+        value={input.endTime}
+        onSelect={onSelectEndTime}
+        onDismiss={() => setEndSheetVisible(false)}
+        mono
+      />
 
-        {error ? <Text style={[styles.error, { color: theme.colors.error }]}>{error}</Text> : null}
-      </ScrollView>
-    </AppScreen>
-    <GenerationLoadingOverlay visible={loading} progress={loadingProgress} />
+      <GenerationLoadingOverlay visible={loading} progress={loadingProgress} />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    gap: spacing.lg,
-    paddingBottom: spacing.xxl,
-  },
-  section: {
-    gap: spacing.md,
-  },
-  fieldGroup: {
-    gap: spacing.sm,
-  },
-  fieldLabel: {
-    fontWeight: '600',
-  },
-  row: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  timeButton: {
+  keyboardView: {
     flex: 1,
   },
-  timeMenuScroll: {
-    maxHeight: 260,
+  tripleRow: {
+    flexDirection: 'row',
+    gap: 14,
+    marginTop: 14,
+  },
+  dateField: {
+    flex: 1.35,
+  },
+  timeField: {
+    flex: 1,
+  },
+  monoInput: {
+    fontFamily: fonts.monoMedium,
+    fontSize: 15,
+  },
+  fieldError: {
+    fontFamily: fonts.body,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 8,
+  },
+  segRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  segTransport: {
+    flex: 1,
+  },
+  segBudget: {
+    flex: 1.3,
+  },
+  segPace: {
+    marginTop: 10,
   },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 12,
   },
-  switchRow: {
+  fieldGap: {
+    marginTop: 14,
+  },
+  sliderBlock: {
+    marginTop: 18,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+  },
+  sliderHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  helperText: {},
-  emptyHint: {},
-  sliderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: spacing.sm,
+  },
+  sliderValue: {
+    fontSize: 12.5,
   },
   slider: {
-    flex: 1,
+    width: '100%',
     height: 40,
+    marginTop: 2,
   },
-  sliderMin: {
-    width: 22,
-    textAlign: 'center',
+  rowLabel: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: 15,
   },
-  sliderMax: {
-    width: 32,
-    textAlign: 'center',
+  errorWrap: {
+    marginTop: spacing.lg,
   },
-  error: {
+  dockHint: {
+    fontFamily: fonts.monoSemi,
+    fontSize: 9.5,
+    letterSpacing: 1.2,
     textAlign: 'center',
+    textTransform: 'uppercase',
   },
 });

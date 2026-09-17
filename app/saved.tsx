@@ -1,63 +1,250 @@
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { FlatList, StyleSheet, View } from 'react-native';
-import { Card, Text, TextInput, useTheme } from 'react-native-paper';
-import { AppCard, AppScreen, ChoiceButtonGroup, PrimaryButton, SecondaryButton } from '@/components/ui';
-import { GROUP_FILTER_OPTIONS } from '@/constants/groupTypes';
+import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import {
+  AppScreen,
+  formatPlanDate,
+  GhostButton,
+  PrimaryButton,
+  UnderlineInput,
+} from '@/components/ui';
 import { usePlanStore } from '@/store/usePlanStore';
-import { GroupType } from '@/types/models';
-import { spacing } from '@/theme/appTheme';
+import { fonts, spacing, useAppPalette } from '@/theme/appTheme';
+import { Plan } from '@/types/models';
 
 export default function SavedPlans() {
-  const theme = useTheme();
+  const p = useAppPalette();
   const plans = usePlanStore((s) => s.plans);
+  const unsavePlan = usePlanStore((s) => s.unsavePlan);
+  const stopsByPlan = usePlanStore((s) => s.stopsByPlan);
   const [q, setQ] = useState('');
-  const [group, setGroup] = useState<'all' | GroupType>('all');
-  // Local filter keeps list interactions instant without extra fetches.
-  const filtered = useMemo(() => plans.filter((p) => (group === 'all' || p.groupType === group) && `${p.city} ${p.date}`.toLowerCase().includes(q.toLowerCase())), [plans, q, group]);
+  const [editing, setEditing] = useState(false);
+
+  const savedPlans = useMemo(() => plans.filter((pl) => pl.isSaved === 1), [plans]);
+
+  const filtered = useMemo(() => {
+    const query = q.trim().toLowerCase();
+
+    if (!query) return savedPlans;
+
+    return savedPlans.filter((pl) =>
+      `${pl.title} ${pl.city} ${pl.date} ${pl.groupType ?? ''}`.toLowerCase().includes(query),
+    );
+  }, [savedPlans, q]);
+
+  const getDisplayTitle = (item: Plan) => {
+    const rawTitle = item.title?.trim();
+    const city = item.city?.trim();
+
+    if (!rawTitle) return city || 'Saved plan';
+
+    const normalizedTitle = rawTitle.toLowerCase();
+    const normalizedCity = city?.toLowerCase();
+
+    if (normalizedCity && normalizedTitle.includes(normalizedCity)) {
+      return city;
+    }
+
+    return rawTitle.replace(/\s+day$/i, '').trim();
+  };
+
+  const confirmRemove = (item: Plan) => {
+    Alert.alert(
+      'Remove saved plan?',
+      `"${getDisplayTitle(item)}" will be removed from your saved plans.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => unsavePlan(item.id),
+        },
+      ],
+    );
+  };
+
+  const subtitle =
+    savedPlans.length === 0
+      ? 'Days worth keeping will show up here.'
+      : `${savedPlans.length} ${savedPlans.length === 1 ? 'day' : 'days'} worth keeping.`;
 
   return (
-    <AppScreen title="Saved Plans" scroll={false}>
-      <TextInput mode="outlined" label="Search city/date" value={q} onChangeText={setQ} />
-      <ChoiceButtonGroup value={group} onValueChange={setGroup} options={GROUP_FILTER_OPTIONS} />
-      {filtered.length === 0 ? (
-        <View style={[styles.emptyState, { borderColor: theme.colors.outline, backgroundColor: theme.colors.surface }]}>
-          <Text variant="titleMedium" style={[styles.emptyTitle, { color: theme.colors.onSurface }]}>No plans found</Text>
-          <Text variant="bodySmall" style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>Try a different filter or create a new itinerary.</Text>
-        </View>
-      ) : null}
+    <AppScreen
+      title="Saved plans"
+      subtitle={subtitle}
+      scroll={false}
+      action={
+        savedPlans.length > 0 ? (
+          <GhostButton onPress={() => setEditing((v) => !v)}>
+            {editing ? 'Done' : 'Edit'}
+          </GhostButton>
+        ) : null
+      }
+    >
+      <UnderlineInput
+        placeholder="City, date, or title"
+        value={q}
+        onChangeText={setQ}
+        autoCorrect={false}
+        returnKeyType="search"
+        containerStyle={styles.search}
+        right={<MaterialCommunityIcons name="magnify" size={18} color={p.textLow} />}
+      />
+
       <FlatList
         data={filtered}
-        keyExtractor={(i) => i.id}
+        keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => (
-          <AppCard>
-            <Card.Title title={item.title} subtitle={`${item.date} · ${item.city}`} />
-            <Card.Actions>
-              <PrimaryButton onPress={() => router.push(`/generated/${item.id}`)}>Open</PrimaryButton>
-              {/* Duplicate routes back through wizard so users can tweak before regenerating. */}
-              <SecondaryButton onPress={() => router.push({ pathname: '/wizard', params: { city: item.city } })}>Duplicate</SecondaryButton>
-            </Card.Actions>
-          </AppCard>
-        )}
+        keyboardShouldPersistTaps="handled"
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <MaterialCommunityIcons
+              name={savedPlans.length === 0 ? 'bookmark-outline' : 'magnify-close'}
+              size={30}
+              color={p.violetText}
+            />
+            <Text style={[styles.emptyTitle, { color: p.textHigh }]}>
+              {savedPlans.length === 0 ? 'No saved plans yet' : 'No matching plans'}
+            </Text>
+            <Text style={[styles.emptyText, { color: p.textMid }]}>
+              {savedPlans.length === 0
+                ? 'Build a day, then tap Save on the route to keep it.'
+                : 'Try a different search.'}
+            </Text>
+            {savedPlans.length === 0 ? (
+              <PrimaryButton onPress={() => router.push('/wizard')} style={styles.emptyCta}>
+                Plan a day
+              </PrimaryButton>
+            ) : null}
+          </View>
+        }
+        renderItem={({ item, index }) => {
+          const stopCount = (stopsByPlan[item.id] || []).length;
+          const meta = [
+            stopCount ? `${stopCount} stop${stopCount === 1 ? '' : 's'}` : null,
+            item.groupType,
+            item.transport === 'walk' ? 'Walk' : 'Drive',
+          ]
+            .filter(Boolean)
+            .join(' · ');
+
+          return (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push(`/plan/${item.id}`)}
+              style={({ pressed }) => [
+                styles.row,
+                index < filtered.length - 1 && {
+                  borderBottomColor: p.line,
+                  borderBottomWidth: 1,
+                },
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <View style={styles.rowCopy}>
+                <Text style={[styles.rowTitle, { color: p.textHigh }]} numberOfLines={1}>
+                  {getDisplayTitle(item)}
+                </Text>
+                <Text style={[styles.rowCity, { color: p.textMid }]} numberOfLines={1}>
+                  {item.city}
+                </Text>
+                <View style={styles.rowMeta}>
+                  <Text style={[styles.rowDate, { color: p.signal }]}>
+                    {formatPlanDate(item.date)}
+                  </Text>
+                  <Text style={[styles.rowMetaText, { color: p.textLow }]}>{meta}</Text>
+                </View>
+              </View>
+              {editing ? (
+                <Pressable
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove saved plan"
+                  onPress={() => confirmRemove(item)}
+                  style={[styles.removeButton, { backgroundColor: p.dangerWash }]}
+                >
+                  <MaterialCommunityIcons name="trash-can-outline" size={18} color={p.danger} />
+                </Pressable>
+              ) : (
+                <MaterialCommunityIcons name="chevron-right" size={20} color={p.textLow} />
+              )}
+            </Pressable>
+          );
+        }}
       />
     </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  listContent: {
-    gap: spacing.sm,
-    paddingBottom: spacing.lg,
+  search: {
+    marginTop: 14,
   },
-  emptyState: {
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderRadius: 14,
-    marginTop: spacing.sm,
+  listContent: {
+    paddingTop: 6,
+    paddingBottom: spacing.xl,
+    flexGrow: 1,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 18,
+  },
+  rowCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  rowTitle: {
+    fontFamily: fonts.displaySemi,
+    fontSize: 18,
+    letterSpacing: -0.2,
+  },
+  rowCity: {
+    fontFamily: fonts.body,
+    fontSize: 13.5,
+  },
+  rowMeta: {
+    flexDirection: 'row',
+    gap: 14,
+    marginTop: 2,
+  },
+  rowDate: {
+    fontFamily: fonts.monoSemi,
+    fontSize: 11,
+  },
+  rowMetaText: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+  },
+  removeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  empty: {
+    alignItems: 'center',
+    paddingVertical: 48,
+    paddingHorizontal: spacing.lg,
+    gap: 8,
   },
   emptyTitle: {
-    marginBottom: spacing.xs,
+    fontFamily: fonts.displaySemi,
+    fontSize: 18,
+    marginTop: 6,
   },
-  emptyText: {},
+  emptyText: {
+    fontFamily: fonts.body,
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+  },
+  emptyCta: {
+    marginTop: 16,
+    alignSelf: 'stretch',
+  },
 });

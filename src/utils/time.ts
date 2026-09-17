@@ -33,6 +33,13 @@ export const formatTimeDisplay = (time24h: string, timeFormat: TimeFormat): stri
   return `${hours12}:${pad(mins)} ${suffix}`;
 };
 
+/** Compact display for tight layouts: "9:00a" / "8:30p" in 12h mode, unchanged in 24h mode. */
+export const formatTimeCompact = (time24h: string, timeFormat: TimeFormat): string => {
+  if (timeFormat === '24h') return time24h;
+  const display = formatTimeDisplay(time24h, timeFormat);
+  return display.replace(/ AM$/, 'a').replace(/ PM$/, 'p');
+};
+
 export const parseTimeDisplayTo24h = (displayTime: string, timeFormat: TimeFormat): string => {
   const normalized = displayTime.trim();
   if (timeFormat === '24h') {

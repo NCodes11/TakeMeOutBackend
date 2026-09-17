@@ -1,132 +1,372 @@
-import { Linking, ScrollView, StyleSheet, View } from 'react-native';
-import { Modal, Portal, Text, useTheme } from 'react-native-paper';
-import { SecondaryButton } from '@/components/ui';
-import { spacing } from '@/theme/appTheme';
+import React, { useMemo, useState } from 'react';
+import {
+  Dimensions,
+  Image,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { MonoLabel, PrimaryButton } from '@/components/ui';
 import { Stop } from '@/types/models';
-import { buildGoogleMapsPinUrl, hasValidCoords } from '@/utils/maps';
-import { resolveDisplayPriceTier } from '@/utils/priceTier';
+import { AppPalette, fonts, shadows, spacing, useAppPalette } from '@/theme/appTheme';
+import { openMapsOptions } from '@/utils/openMapsOptions';
+import { resolvePrimaryPhotoUrl } from '@/utils/stopMedia';
 
-interface PlaceInfoModalProps {
+type Props = {
   visible: boolean;
-  stop: Stop | null;
+  stop?: Stop | null;
   onDismiss: () => void;
+};
+
+const { width, height } = Dimensions.get('window');
+
+function isPlusCodeAddress(address?: string | null) {
+  if (!address) return false;
+  return /^[A-Z0-9]{4,8}\+\w+/i.test(address.trim());
 }
 
-const joinParts = (parts: Array<string | null | undefined>) => parts.filter(Boolean).join(' · ');
+function getDisplayAddress(stop: Stop): string | undefined {
+  const rawAddress = stop.address?.trim();
 
-export const PlaceInfoModal = ({ visible, stop, onDismiss }: PlaceInfoModalProps) => {
-  const theme = useTheme();
-  const priceTier = stop ? resolveDisplayPriceTier(stop.priceLevel, stop.costLevel, '$$') : '$$';
+  if (!rawAddress) {
+    return stop.category || undefined;
+  }
 
-  const openMaps = async () => {
-    if (!stop || !hasValidCoords({ lat: stop.lat, lng: stop.lng })) return;
-    await Linking.openURL(buildGoogleMapsPinUrl({ lat: stop.lat, lng: stop.lng }, stop.name));
+  if (!isPlusCodeAddress(rawAddress)) {
+    return rawAddress;
+  }
+
+  const parts = rawAddress.split(' ').filter(Boolean);
+
+  if (parts.length > 1) {
+    const withoutPlusCode = parts.slice(1).join(' ').trim();
+    if (withoutPlusCode) {
+      return withoutPlusCode;
+    }
+  }
+
+  return stop.category || undefined;
+}
+
+function isDollarLabel(value?: string | null): value is '$' | '$$' | '$$$' | '$$$$' {
+  return value === '$' || value === '$$' || value === '$$$' || value === '$$$$';
+}
+
+function getDisplayPrice(stop: Stop): string | undefined {
+  if (isDollarLabel(stop.costLevel)) {
+    return stop.costLevel;
+  }
+
+  if (typeof stop.priceLevel === 'number' && Number.isFinite(stop.priceLevel)) {
+    const normalized = Math.max(1, Math.min(4, Math.round(stop.priceLevel)));
+    return '$'.repeat(normalized);
+  }
+
+  return undefined;
+}
+
+function getDisplayHours(stop: Stop): string | undefined {
+  if (!stop.openingHoursText) return undefined;
+  const value = String(stop.openingHoursText).trim();
+  return value || undefined;
+}
+
+export function PlaceInfoModal({ visible, stop, onDismiss }: Props) {
+  const p = useAppPalette();
+  const [imageIndex, setImageIndex] = useState(0);
+
+  const images = useMemo(() => {
+    if (!stop) return [];
+
+    if (Array.isArray(stop.photos) && stop.photos.length > 0) {
+      return stop.photos.map((p) => p.url).filter(Boolean);
+    }
+
+    const primary = resolvePrimaryPhotoUrl(stop);
+    if (primary) {
+      return [primary];
+    }
+
+    return [];
+  }, [stop]);
+
+  if (!stop) return null;
+
+  const hasCoordinates =
+    typeof stop.lat === 'number' &&
+    typeof stop.lng === 'number' &&
+    Number.isFinite(stop.lat) &&
+    Number.isFinite(stop.lng);
+
+  const price = getDisplayPrice(stop);
+  const displayAddress = getDisplayAddress(stop);
+  const displayHours = getDisplayHours(stop);
+
+  const openInMaps = async () => {
+    if (!hasCoordinates) return;
+
+    await openMapsOptions({
+      name: stop.name,
+      lat: stop.lat,
+      lng: stop.lng,
+    });
   };
 
   return (
-    <Portal>
-      <Modal visible={visible} onDismiss={onDismiss} contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}>
-        {!stop ? null : (
-          <ScrollView contentContainerStyle={styles.content}>
-            <View style={styles.header}>
-              <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onSurface }]}>
-                {stop.name}
-              </Text>
-              <Text variant="bodyMedium" style={[styles.subtle, { color: theme.colors.onSurfaceVariant }]}>
-                {joinParts([stop.category, `Price ${priceTier}`])}
-              </Text>
-            </View>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      presentationStyle="overFullScreen"
+      onRequestClose={onDismiss}
+    >
+      <View style={[styles.container, { backgroundColor: p.backdrop }]}>
+        <View style={[styles.sheet, { backgroundColor: p.canvas, borderColor: p.line }]}>
+          <View style={styles.closeRow}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              onPress={onDismiss}
+              hitSlop={8}
+              style={[
+                styles.closeButton,
+                shadows.raised,
+                {
+                  backgroundColor: p.surfaceRaised,
+                  borderColor: p.lineStrong,
+                  shadowColor: p.shadowColor,
+                },
+              ]}
+            >
+              <MaterialCommunityIcons name="close" size={20} color={p.textHigh} />
+            </Pressable>
+          </View>
 
-            {stop.address ? (
-              <View style={styles.section}>
-                <Text variant="labelLarge" style={[styles.label, { color: theme.colors.onSurface }]}>
-                  Address
-                </Text>
-                <Text variant="bodyMedium" style={[styles.body, { color: theme.colors.onSurfaceVariant }]}>
-                  {stop.address}
-                </Text>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+          >
+            {images.length > 0 && (
+              <View>
+                <ScrollView
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  onMomentumScrollEnd={(e) => {
+                    const index = Math.round(e.nativeEvent.contentOffset.x / width);
+                    setImageIndex(index);
+                  }}
+                >
+                  {images.map((uri: string, i: number) => (
+                    <Image
+                      key={`${uri}-${i}`}
+                      source={{ uri }}
+                      style={[styles.heroImage, { backgroundColor: p.surfaceRecessed }]}
+                    />
+                  ))}
+                </ScrollView>
+
+                {images.length > 1 && (
+                  <View style={styles.dots}>
+                    {images.map((_: string, i: number) => (
+                      <View
+                        key={i}
+                        style={[
+                          styles.dot,
+                          {
+                            backgroundColor: i === imageIndex ? p.violetFill : p.lineStrong,
+                          },
+                        ]}
+                      />
+                    ))}
+                  </View>
+                )}
               </View>
-            ) : null}
+            )}
 
-            <View style={styles.section}>
-              <Text variant="labelLarge" style={[styles.label, { color: theme.colors.onSurface }]}>
-                Details
-              </Text>
-              <Text variant="bodyMedium" style={[styles.body, { color: theme.colors.onSurfaceVariant }]}>
-                {joinParts([
-                  typeof stop.rating === 'number' ? `${stop.rating.toFixed(1)} stars` : undefined,
-                  typeof stop.reviewCount === 'number' ? `${stop.reviewCount} reviews` : undefined,
-                  typeof stop.durationMin === 'number' ? `${stop.durationMin} min stop` : undefined,
-                  typeof stop.etaMin === 'number' && stop.order > 0 ? `${stop.etaMin} min travel` : undefined,
-                ]) || 'No extra place details available yet.'}
-              </Text>
-            </View>
+            <View style={styles.content}>
+              <MonoLabel>{stop.category}</MonoLabel>
+              <Text style={[styles.title, { color: p.textHigh }]}>{stop.name}</Text>
 
-            {stop.openingHoursText ? (
-              <View style={styles.section}>
-                <Text variant="labelLarge" style={[styles.label, { color: theme.colors.onSurface }]}>
-                  Hours
-                </Text>
-                <Text variant="bodyMedium" style={[styles.body, { color: theme.colors.onSurfaceVariant }]}>
-                  {stop.openingHoursText}
-                </Text>
+              {stop.why ? (
+                <View style={[styles.why, { borderLeftColor: p.violetDecorative }]}>
+                  <Text style={[styles.whyText, { color: p.textMid }]}>{stop.why}</Text>
+                </View>
+              ) : null}
+
+              <View style={styles.rows}>
+                {displayAddress ? <InfoRow label="Address" value={displayAddress} p={p} /> : null}
+
+                {typeof stop.rating === 'number' ? (
+                  <InfoRow
+                    label="Rating"
+                    value={`${stop.rating.toFixed(1)} ★ ${
+                      stop.reviewCount ? `(${stop.reviewCount} reviews)` : ''
+                    }`}
+                    p={p}
+                  />
+                ) : null}
+
+                {typeof stop.openNow === 'boolean' ? (
+                  <InfoRow label="Status" value={stop.openNow ? 'Open now' : 'Closed now'} p={p} />
+                ) : null}
+
+                {price ? <InfoRow label="Price" value={price} p={p} /> : null}
+
+                {typeof stop.durationMin === 'number' ? (
+                  <InfoRow
+                    label="Suggested stay"
+                    value={`${stop.durationMin} minutes`}
+                    p={p}
+                    time
+                  />
+                ) : null}
+
+                {typeof stop.etaMin === 'number' ? (
+                  <InfoRow label="Travel time" value={`About ${stop.etaMin} minutes`} p={p} time />
+                ) : null}
+
+                {typeof stop.distanceKm === 'number' ? (
+                  <InfoRow label="Distance" value={`${stop.distanceKm.toFixed(1)} km`} p={p} />
+                ) : null}
+
+                {displayHours ? <InfoRow label="Hours" value={displayHours} p={p} /> : null}
               </View>
-            ) : null}
-
-            {stop.why ? (
-              <View style={styles.section}>
-                <Text variant="labelLarge" style={[styles.label, { color: theme.colors.onSurface }]}>
-                  Why this stop
-                </Text>
-                <Text variant="bodyMedium" style={[styles.body, { color: theme.colors.onSurfaceVariant }]}>
-                  {stop.why}
-                </Text>
-              </View>
-            ) : null}
-
-            <View style={styles.actions}>
-              <SecondaryButton onPress={onDismiss}>Close</SecondaryButton>
-              <SecondaryButton disabled={!hasValidCoords({ lat: stop.lat, lng: stop.lng })} onPress={openMaps}>
-                Open in Maps
-              </SecondaryButton>
             </View>
           </ScrollView>
-        )}
-      </Modal>
-    </Portal>
+
+          <View style={[styles.footer, { backgroundColor: p.canvas, borderTopColor: p.line }]}>
+            <PrimaryButton icon="directions" onPress={openInMaps} disabled={!hasCoordinates}>
+              Open in Maps
+            </PrimaryButton>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
-};
+}
+
+function InfoRow({
+  label,
+  value,
+  p,
+  time = false,
+}: {
+  label: string;
+  value: string;
+  p: AppPalette;
+  time?: boolean;
+}) {
+  return (
+    <View style={[styles.infoRow, { borderBottomColor: p.line }]}>
+      <MonoLabel>{label}</MonoLabel>
+      <Text
+        style={[
+          styles.infoValue,
+          { color: time ? p.signal : p.textHigh },
+          time && styles.infoValueTime,
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
-  modal: {
-    margin: spacing.lg,
-    maxHeight: '80%',
-    borderRadius: 20,
+  container: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    height: '88%',
+    borderTopWidth: 1,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    overflow: 'hidden',
+  },
+  closeRow: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    zIndex: 5,
+  },
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scrollContent: {
+    paddingBottom: 120,
+  },
+  heroImage: {
+    width,
+    height: height * 0.34,
+  },
+  dots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginHorizontal: 3,
   },
   content: {
-    gap: spacing.md,
-    padding: spacing.lg,
-  },
-  header: {
-    gap: spacing.xs,
+    paddingHorizontal: spacing.gutter,
+    paddingTop: spacing.lg,
+    gap: 8,
   },
   title: {
-    fontWeight: '800',
+    fontFamily: fonts.display,
+    fontSize: 27,
+    lineHeight: 32,
+    letterSpacing: -0.8,
   },
-  subtle: {},
-  section: {
-    gap: spacing.xs,
+  why: {
+    borderLeftWidth: 2,
+    paddingLeft: 12,
+    marginTop: 6,
   },
-  label: {
-    fontWeight: '700',
+  whyText: {
+    fontFamily: fonts.body,
+    fontSize: 14,
+    lineHeight: 21,
   },
-  body: {
-    lineHeight: 20,
+  rows: {
+    marginTop: 12,
   },
-  actions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.xs,
+  infoRow: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    gap: 4,
+  },
+  infoValue: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: 15.5,
+    lineHeight: 22,
+  },
+  infoValueTime: {
+    fontFamily: fonts.monoSemi,
+    fontSize: 14.5,
+  },
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: spacing.gutter,
+    paddingTop: 12,
+    paddingBottom: 28,
+    borderTopWidth: 1,
   },
 });

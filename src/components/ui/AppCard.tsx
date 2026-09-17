@@ -1,33 +1,38 @@
 import { ReactNode } from 'react';
-import { StyleSheet } from 'react-native';
-import { Card, useTheme } from 'react-native-paper';
+import { StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { radius, shadows, useAppPalette } from '@/theme/appTheme';
 
 interface AppCardProps {
   children: ReactNode;
+  style?: StyleProp<ViewStyle>;
 }
 
-export const AppCard = ({ children }: AppCardProps) => {
-  const theme = useTheme();
+/** Raised white surface — the single elevation step of the light system. */
+export const AppCard = ({ children, style }: AppCardProps) => {
+  const p = useAppPalette();
 
   return (
-    <Card
+    <View
       style={[
         styles.card,
+        shadows.raised,
         {
-          backgroundColor: theme.colors.surface,
-          borderColor: theme.colors.outline,
+          backgroundColor: p.surfaceRaised,
+          borderColor: p.line,
+          shadowColor: p.shadowColor,
         },
+        style,
       ]}
-      mode="contained"
     >
       {children}
-    </Card>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: radius.media,
+    overflow: 'hidden',
   },
 });

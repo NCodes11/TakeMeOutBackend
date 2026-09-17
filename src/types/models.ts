@@ -13,6 +13,12 @@ export type StopType =
   | 'arts'
   | 'attraction';
 
+export interface OpeningPeriod {
+  day: number; // 0=Sunday ... 6=Saturday
+  openMinutes: number; // minutes after midnight
+  closeMinutes: number; // can be < openMinutes for overnight hours
+}
+
 export interface PlanPreferences {
   interests: string[];
   avoid: string[];
@@ -39,6 +45,9 @@ export interface Plan {
   /** Origin used for place search and rerolls (enables Google Places nearby search). */
   startLat?: number;
   startLng?: number;
+
+  /** 1 = saved by user, 0 = not saved */
+  isSaved: number;
 }
 
 export interface PlacePhoto {
@@ -70,6 +79,8 @@ export interface Stop {
   openNow?: boolean;
   rating?: number;
   openingHoursText?: string;
+  openingPeriods?: OpeningPeriod[];
+  timezone?: string;
   priceLevel?: number;
   distanceKm?: number;
   etaMin?: number;
@@ -155,6 +166,8 @@ export interface PlaceCandidate {
   rating?: number;
   reviewCount?: number;
   openingHoursText?: string;
+  openingPeriods?: OpeningPeriod[];
+  timezone?: string;
   priceLevel?: number;
 
   websiteUri?: string;
@@ -196,6 +209,7 @@ export interface WizardInput {
 
   transport: TransportType;
   budget: BudgetType;
+  pace?: 'relaxed' | 'standard' | 'packed';
   feelingLucky: boolean;
 
   preferences: PlanPreferences;

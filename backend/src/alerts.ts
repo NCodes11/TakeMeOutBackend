@@ -13,16 +13,20 @@ const toLocationLabel = (city?: string, state?: string) => {
 };
 
 const buildTripFeedbackText = (payload: TripFeedbackIngest) => {
-  const sentiment = payload.thumbsUp ? '👍 Positive trip feedback' : '👎 Negative trip feedback';
+  const sentiment = payload.thumbsUp ? '👍 **Loved it**' : '👎 **Could be better**';
   const location = toLocationLabel(payload.locationCity, payload.locationState);
-  const note = truncate(payload.feedbackText, 220);
+  const note = truncate(payload.feedbackText, 300);
+
   return [
+    `📍 **Trip Feedback**`,
+    '',
     sentiment,
-    `Trip: ${payload.tripId}`,
-    `Location: ${location}`,
-    `Stops: ${payload.stopCount}`,
-    `Budget: ${payload.priceTier}`,
-    note ? `Note: ${note}` : undefined,
+    `**Trip ID:** ${payload.tripId}`,
+    `**Location:** ${location}`,
+    `**Stops:** ${payload.stopCount}`,
+    `**Budget:** ${payload.priceTier}`,
+    note ? '' : undefined,
+    note ? `📝 **Feedback:**\n${note}` : undefined,
   ]
     .filter(Boolean)
     .join('\n');
@@ -31,7 +35,13 @@ const buildTripFeedbackText = (payload: TripFeedbackIngest) => {
 const buildFeatureRequestText = (payload: FeatureRequestIngest) => {
   const category = payload.category?.trim() || 'Uncategorized';
   const note = truncate(payload.message, 260);
-  return [`💡 New feature request`, `Category: ${category}`, `Message: ${note}`].join('\n');
+
+  return [
+    `💡 **New Feature Request**`,
+    '',
+    `**Category:** ${category}`,
+    `**Message:** ${note}`,
+  ].join('\n');
 };
 
 const postAlert = async (
@@ -40,13 +50,14 @@ const postAlert = async (
   eventType: 'tripFeedback' | 'featureRequest',
   payload: Record<string, unknown>,
 ) => {
+  console.log(`[alerts] posting ${eventType} to webhook`);
+
   const response = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    // `text` works for Slack; `content` works for Discord.
     body: JSON.stringify({
-      text,
       content: text,
+      text,
       eventType,
       payload,
       timestamp: new Date().toISOString(),
@@ -54,11 +65,13 @@ const postAlert = async (
   });
 
   if (!response.ok) {
-    const errorBody = truncate(await response.text().catch(() => ''), 180);
+    const errorBody = truncate(await response.text().catch(() => ''), 500);
     throw new Error(
       `Webhook request failed with status ${response.status}${errorBody ? `: ${errorBody}` : ''}`,
     );
   }
+
+  console.log(`[alerts] ${eventType} webhook delivered successfully`);
 };
 
 export const sendTripFeedbackAlert = async ({
@@ -68,7 +81,11 @@ export const sendTripFeedbackAlert = async ({
   webhookUrl?: string;
   payload: TripFeedbackIngest;
 }) => {
-  if (!webhookUrl) return;
+  if (!webhookUrl) {
+    console.warn('[alerts] No trip feedback webhook configured');
+    return;
+  }
+
   const text = buildTripFeedbackText(payload);
   await postAlert(webhookUrl, text, 'tripFeedback', payload as unknown as Record<string, unknown>);
 };
@@ -80,7 +97,11 @@ export const sendFeatureRequestAlert = async ({
   webhookUrl?: string;
   payload: FeatureRequestIngest;
 }) => {
-  if (!webhookUrl) return;
+  if (!webhookUrl) {
+    console.warn('[alerts] No feature request webhook configured');
+    return;
+  }
+
   const text = buildFeatureRequestText(payload);
   await postAlert(webhookUrl, text, 'featureRequest', payload as unknown as Record<string, unknown>);
 };

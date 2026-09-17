@@ -1,18 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Animated,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Vibration,
-  View,
-} from 'react-native';
-import { Modal, Portal, Text, TextInput, useTheme } from 'react-native-paper';
-import { PrimaryButton, SecondaryButton } from '@/components/ui';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, Modal, Pressable, StyleSheet, Text, Vibration, View } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { GhostButton, PrimaryButton } from '@/components/ui';
 import { Plan, Stop } from '@/types/models';
 import { submitTripFeedback } from '@/services/feedback';
-import { spacing } from '@/theme/appTheme';
+import { fonts, radius, shadows, spacing, useAppPalette } from '@/theme/appTheme';
 
 interface FeedbackModalProps {
   visible: boolean;
@@ -22,10 +14,16 @@ interface FeedbackModalProps {
   onSubmitted: () => void;
 }
 
-export const FeedbackModal = ({ visible, plan, stops, onDismiss, onSubmitted }: FeedbackModalProps) => {
-  const theme = useTheme();
+export const FeedbackModal = ({
+  visible,
+  plan,
+  stops,
+  onDismiss,
+  onSubmitted,
+}: FeedbackModalProps) => {
+  const p = useAppPalette();
+
   const [thumbsUp, setThumbsUp] = useState<boolean | null>(null);
-  const [message, setMessage] = useState('');
   const [pending, setPending] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -33,10 +31,8 @@ export const FeedbackModal = ({ visible, plan, stops, onDismiss, onSubmitted }: 
   const downScale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    // Reset local modal state every time it closes so each session starts clean.
     if (!visible) {
       setThumbsUp(null);
-      setMessage('');
       setPending(false);
       setSubmitted(false);
       upScale.setValue(1);
@@ -47,7 +43,7 @@ export const FeedbackModal = ({ visible, plan, stops, onDismiss, onSubmitted }: 
   const animateChoice = (isUp: boolean) => {
     Vibration.vibrate(10);
     Animated.spring(isUp ? upScale : downScale, {
-      toValue: 1.08,
+      toValue: 1.06,
       useNativeDriver: true,
       speed: 16,
       bounciness: 8,
@@ -59,147 +55,185 @@ export const FeedbackModal = ({ visible, plan, stops, onDismiss, onSubmitted }: 
     });
   };
 
-  const selectedHint = useMemo(() => {
-    if (thumbsUp == null) return null;
-    return thumbsUp ? 'Great. What worked best?' : 'Thanks. What should be improved?';
-  }, [thumbsUp]);
-
   const onSend = async () => {
     if (thumbsUp == null || pending) return;
+
     setPending(true);
     Vibration.vibrate(10);
-    await submitTripFeedback({
-      plan,
-      stops,
-      thumbsUp,
-      feedbackText: message,
-    });
-    setPending(false);
-    setSubmitted(true);
+
+    try {
+      await submitTripFeedback({
+        plan,
+        stops,
+        thumbsUp,
+      });
+      setSubmitted(true);
+    } catch (error) {
+      console.error('Failed to open trip feedback page', error);
+    } finally {
+      setPending(false);
+    }
   };
 
+  const Choice = ({
+    icon,
+    label,
+    selected,
+    scale,
+    onPress,
+  }: {
+    icon: 'thumb-up-outline' | 'thumb-down-outline';
+    label: string;
+    selected: boolean;
+    scale: Animated.Value;
+    onPress: () => void;
+  }) => (
+    <Animated.View style={{ transform: [{ scale }], flex: 1 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        onPress={onPress}
+        style={[
+          styles.choice,
+          shadows.raised,
+          {
+            backgroundColor: selected ? p.violetWash : p.surfaceRaised,
+            borderColor: selected ? p.violetFill : p.lineStrong,
+            shadowColor: p.shadowColor,
+          },
+        ]}
+      >
+        <MaterialCommunityIcons name={icon} size={26} color={p.violetText} />
+        <Text style={[styles.choiceLabel, { color: selected ? p.violetText : p.textHigh }]}>
+          {label}
+        </Text>
+      </Pressable>
+    </Animated.View>
+  );
+
   return (
-    <Portal>
-      <Modal visible={visible} onDismiss={onDismiss} contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onDismiss}>
+      <View style={styles.overlay}>
+        <Pressable style={[styles.backdrop, { backgroundColor: p.backdrop }]} onPress={onDismiss} />
+        <View style={[styles.sheet, { backgroundColor: p.surfaceRaised, borderColor: p.line }]}>
+          <View style={[styles.grabber, { backgroundColor: p.lineStrong }]} />
           {submitted ? (
             <View style={styles.content}>
-              <Text variant="titleMedium" style={[styles.title, { color: theme.colors.onSurface }]}>
-                Thanks! Your feedback helps make Take Me Out better.
+              <Text style={[styles.title, { color: p.textHigh }]}>Thanks for the note</Text>
+              <Text style={[styles.body, { color: p.textMid }]}>
+                Your feedback helps make Take Me Out better.
               </Text>
               <PrimaryButton onPress={onSubmitted}>Done</PrimaryButton>
             </View>
           ) : (
             <View style={styles.content}>
-              <Text variant="titleLarge" style={[styles.title, { color: theme.colors.onSurface }]}>
-                How was your day?
-              </Text>
+              <Text style={[styles.title, { color: p.textHigh }]}>How was your day?</Text>
+
               <View style={styles.choiceRow}>
-                <Animated.View style={{ transform: [{ scale: upScale }], flex: 1 }}>
-                  <Pressable
-                    style={[
-                      styles.choice,
-                      {
-                        borderColor: theme.colors.outline,
-                        backgroundColor: theme.colors.surfaceVariant,
-                      },
-                      thumbsUp === true && {
-                        borderColor: theme.colors.primary,
-                        backgroundColor: theme.colors.primaryContainer,
-                      },
-                    ]}
-                    onPress={() => {
-                      setThumbsUp(true);
-                      animateChoice(true);
-                    }}
-                  >
-                    <Text style={styles.emoji}>👍</Text>
-                    <Text style={[styles.choiceLabel, { color: theme.colors.onSurface }]}>Loved it</Text>
-                  </Pressable>
-                </Animated.View>
-                <Animated.View style={{ transform: [{ scale: downScale }], flex: 1 }}>
-                  <Pressable
-                    style={[
-                      styles.choice,
-                      {
-                        borderColor: theme.colors.outline,
-                        backgroundColor: theme.colors.surfaceVariant,
-                      },
-                      thumbsUp === false && {
-                        borderColor: theme.colors.primary,
-                        backgroundColor: theme.colors.primaryContainer,
-                      },
-                    ]}
-                    onPress={() => {
-                      setThumbsUp(false);
-                      animateChoice(false);
-                    }}
-                  >
-                    <Text style={styles.emoji}>👎</Text>
-                    <Text style={[styles.choiceLabel, { color: theme.colors.onSurface }]}>Could be better</Text>
-                  </Pressable>
-                </Animated.View>
+                <Choice
+                  icon="thumb-up-outline"
+                  label="Loved it"
+                  selected={thumbsUp === true}
+                  scale={upScale}
+                  onPress={() => {
+                    setThumbsUp(true);
+                    animateChoice(true);
+                  }}
+                />
+                <Choice
+                  icon="thumb-down-outline"
+                  label="Could be better"
+                  selected={thumbsUp === false}
+                  scale={downScale}
+                  onPress={() => {
+                    setThumbsUp(false);
+                    animateChoice(false);
+                  }}
+                />
               </View>
-              {thumbsUp != null ? (
-                <>
-                  <Text variant="bodySmall" style={[styles.hint, { color: theme.colors.onSurfaceVariant }]}>
-                    {selectedHint}
-                  </Text>
-                  <TextInput
-                    mode="outlined"
-                    multiline
-                    numberOfLines={4}
-                    label="Tell us what worked or what didn't (optional)"
-                    placeholder={'Stops were too far apart\nLoved the outdoor suggestions\nWish there were more attractions'}
-                    value={message}
-                    onChangeText={setMessage}
-                    style={[styles.input, { backgroundColor: theme.colors.surface }]}
-                  />
-                  <PrimaryButton onPress={onSend} loading={pending} disabled={pending}>
-                    Send Feedback
-                  </PrimaryButton>
-                </>
-              ) : null}
-              <SecondaryButton onPress={onDismiss} disabled={pending}>
-                Not now
-              </SecondaryButton>
+
+              <Text style={[styles.hint, { color: p.textLow }]}>
+                Tap send to continue to the feedback form.
+              </Text>
+
+              <PrimaryButton
+                onPress={onSend}
+                loading={pending}
+                disabled={pending || thumbsUp == null}
+              >
+                Send feedback
+              </PrimaryButton>
+
+              <View style={styles.notNow}>
+                <GhostButton onPress={onDismiss} disabled={pending}>
+                  Not now
+                </GhostButton>
+              </View>
             </View>
           )}
-        </KeyboardAvoidingView>
-      </Modal>
-    </Portal>
+        </View>
+      </View>
+    </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  modal: {
-    margin: spacing.lg,
-    padding: spacing.lg,
-    borderRadius: 16,
+  overlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sheet: {
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    paddingHorizontal: spacing.gutter,
+    paddingBottom: 28,
+  },
+  grabber: {
+    alignSelf: 'center',
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 10,
+    marginBottom: 16,
   },
   content: {
     gap: spacing.md,
   },
   title: {
-    fontWeight: '700',
+    fontFamily: fonts.display,
+    fontSize: 24,
+    letterSpacing: -0.6,
+  },
+  body: {
+    fontFamily: fonts.body,
+    fontSize: 14.5,
+    lineHeight: 21,
   },
   choiceRow: {
     flexDirection: 'row',
-    gap: spacing.sm,
+    gap: 10,
   },
   choice: {
     borderWidth: 1,
-    borderRadius: 14,
-    paddingVertical: spacing.lg,
+    borderRadius: radius.media,
+    paddingVertical: 20,
     alignItems: 'center',
-    gap: spacing.xs,
-  },
-  emoji: {
-    fontSize: 30,
+    gap: 8,
   },
   choiceLabel: {
-    fontWeight: '600',
+    fontFamily: fonts.bodySemi,
+    fontSize: 13.5,
   },
-  hint: {},
-  input: {},
+  hint: {
+    fontFamily: fonts.body,
+    fontSize: 12.5,
+  },
+  notNow: {
+    alignItems: 'center',
+  },
 });

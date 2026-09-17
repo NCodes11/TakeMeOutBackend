@@ -32,7 +32,10 @@ const buildRequestMetadata = (req: Request, fallbackAppVersion?: string): Reques
 
 export const createApp = (config: BackendConfig = {}) => {
   const nodeEnv = config.nodeEnv ?? process.env.NODE_ENV ?? 'development';
-  const dbPath = config.dbPath ?? process.env.FEEDBACK_DB_PATH ?? path.resolve(process.cwd(), 'data/feedback.sqlite');
+  const dbPath =
+    config.dbPath ??
+    process.env.FEEDBACK_DB_PATH ??
+    path.resolve(process.cwd(), 'data/feedback.sqlite');
   const ingestKey = config.ingestKey ?? process.env.FEEDBACK_INGEST_KEY;
   const fallbackWebhookUrl =
     config.fallbackWebhookUrl ??
@@ -49,19 +52,19 @@ export const createApp = (config: BackendConfig = {}) => {
 
   const db = createDatabase(dbPath);
   const app = express();
+
   const logAlertFailure = (eventType: 'tripFeedback' | 'featureRequests', error: unknown) => {
-    if (nodeEnv === 'production') return;
     console.error(`[alerts] Failed to deliver ${eventType} webhook`, error);
+    if (nodeEnv === 'production') return;
   };
 
   app.use(express.json({ limit: '256kb' }));
 
   if (nodeEnv !== 'production') {
-    app.use((req, res, next) => {
+    app.use((req: Request, res: Response, next: NextFunction) => {
       const start = Date.now();
       res.on('finish', () => {
         const duration = Date.now() - start;
-        // Dev-only request logging.
         console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${duration}ms)`);
       });
       next();
@@ -77,40 +80,80 @@ export const createApp = (config: BackendConfig = {}) => {
     return next();
   };
 
-  app.get('/health', (_req, res) => {
+  app.get('/health', (_req: Request, res: Response) => {
+    console.log('[health] hit');
     res.json({ ok: true });
   });
 
-  app.post('/tripFeedback', requireIngestKey, (req, res) => {
+  app.post('/tripFeedback', requireIngestKey, (req: Request, res: Response) => {
     const parsed = tripFeedbackSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ ok: false, error: 'invalid_payload', details: parsed.error.flatten() });
+      console.error('[tripFeedback] invalid payload', parsed.error.flatten());
+      return res.status(400).json({
+        ok: false,
+        error: 'invalid_payload',
+        details: parsed.error.flatten(),
+      });
     }
+
+    console.log('[tripFeedback] received payload:', parsed.data);
 
     const metadata = buildRequestMetadata(req, parsed.data.appVersion);
     insertTripFeedback(db, parsed.data, metadata);
+
     const tripWebhookUrl = parsed.data.thumbsUp
       ? discordTripFeedbackWebhookUrl ?? fallbackWebhookUrl
       : discordTripDownWebhookUrl ?? discordTripFeedbackWebhookUrl ?? fallbackWebhookUrl;
+
+    console.log('[tripFeedback] thumbsUp:', parsed.data.thumbsUp);
+    console.log('[tripFeedback] webhook configured:', Boolean(tripWebhookUrl));
+
     void sendTripFeedbackAlert({
       webhookUrl: tripWebhookUrl,
       payload: parsed.data,
-    }).catch((error) => logAlertFailure('tripFeedback', error));
+    })
+      .then(() => {
+        console.log('[tripFeedback] alert sent successfully');
+      })
+      .catch((error) => {
+        console.error('[tripFeedback] alert send failed', error);
+        logAlertFailure('tripFeedback', error);
+      });
+
     return res.status(200).json({ ok: true });
   });
 
-  app.post('/featureRequests', requireIngestKey, (req, res) => {
+  app.post('/featureRequests', requireIngestKey, (req: Request, res: Response) => {
     const parsed = featureRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ ok: false, error: 'invalid_payload', details: parsed.error.flatten() });
+      console.error('[featureRequests] invalid payload', parsed.error.flatten());
+      return res.status(400).json({
+        ok: false,
+        error: 'invalid_payload',
+        details: parsed.error.flatten(),
+      });
     }
+
+    console.log('[featureRequests] received payload:', parsed.data);
 
     const metadata = buildRequestMetadata(req, parsed.data.appVersion);
     insertFeatureRequest(db, parsed.data, metadata);
+
+    const featureWebhookUrl = discordFeatureWebhookUrl ?? fallbackWebhookUrl;
+    console.log('[featureRequests] webhook configured:', Boolean(featureWebhookUrl));
+
     void sendFeatureRequestAlert({
-      webhookUrl: discordFeatureWebhookUrl ?? fallbackWebhookUrl,
+      webhookUrl: featureWebhookUrl,
       payload: parsed.data,
-    }).catch((error) => logAlertFailure('featureRequests', error));
+    })
+      .then(() => {
+        console.log('[featureRequests] alert sent successfully');
+      })
+      .catch((error) => {
+        console.error('[featureRequests] alert send failed', error);
+        logAlertFailure('featureRequests', error);
+      });
+
     return res.status(200).json({ ok: true });
   });
 

@@ -1,5 +1,5 @@
 import { PlaceCandidate, StopType, TransportType, WizardInput, GroupType } from '@/types/models';
-import { RouteLeg, RoutingProvider } from '@/providers/routingProvider';
+import { RouteLeg } from '@/providers/routingProvider';
 import { budgetScoreAdjustment, resolvePlaceTier } from '@/utils/priceTier';
 import {
   getExplicitSelectedStopTypes,
@@ -21,6 +21,16 @@ interface DurationRule {
   max: Minutes;
   weight: number;
 }
+
+type OpeningPeriodLike = {
+  day: number;
+  openMinutes: number;
+  closeMinutes: number;
+};
+
+type PlaceWithOpeningPeriods = {
+  openingPeriods?: OpeningPeriodLike[];
+};
 
 const TYPE_RULES: Record<StopType, StopTypeRule> = {
   coffee: { maxDefault: 1, repeatWeight: 1, importance: 2 },
@@ -102,10 +112,76 @@ const deterministicIndex = (seed: string, size: number) => {
   return Math.abs(hash) % size;
 };
 
-/**
- * Allocates stop types across the requested number of slots using importance
- * and repeat weights so the itinerary has a balanced structure.
- */
+const normalizeDayIndex = (value: number) => {
+  const normalized = value % 7;
+  return normalized < 0 ? normalized + 7 : normalized;
+};
+
+const getDateDayIndex = (date: string) => {
+  const parsed = new Date(`${date}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.getDay();
+};
+
+const isPeriodOpenAt = (
+  period: OpeningPeriodLike,
+  dayIndex: number,
+  startMinutes: number,
+  endMinutes: number,
+) => {
+  const periodDay = normalizeDayIndex(period.day);
+  const open = period.openMinutes;
+  const close = period.closeMinutes;
+
+  if (close > open) {
+    return periodDay === dayIndex && startMinutes >= open && endMinutes <= close;
+  }
+
+  if (close < open) {
+    const nextDay = normalizeDayIndex(periodDay + 1);
+
+    if (dayIndex === periodDay && startMinutes >= open) {
+      return endMinutes <= 1440;
+    }
+
+    if (dayIndex === nextDay && endMinutes <= close) {
+      return startMinutes >= 0;
+    }
+
+    return false;
+  }
+
+  return false;
+};
+
+export const isPlaceOpenAt = (
+  place: PlaceWithOpeningPeriods | null | undefined,
+  date: string,
+  startTime: string,
+  durationMinutes = 0,
+): boolean => {
+  const periods = Array.isArray(place?.openingPeriods) ? place.openingPeriods : [];
+  if (periods.length === 0) return true;
+
+  const dayIndex = getDateDayIndex(date);
+  if (dayIndex == null) return true;
+
+  const startMinutes = parseMinutes(startTime);
+  const endMinutesRaw = startMinutes + Math.max(0, durationMinutes);
+
+  if (endMinutesRaw <= 1440) {
+    return periods.some((period) => isPeriodOpenAt(period, dayIndex, startMinutes, endMinutesRaw));
+  }
+
+  const firstDayOk = periods.some((period) => isPeriodOpenAt(period, dayIndex, startMinutes, 1440));
+  if (!firstDayOk) return false;
+
+  const nextDay = normalizeDayIndex(dayIndex + 1);
+  const remainder = endMinutesRaw - 1440;
+
+  return periods.some((period) => isPeriodOpenAt(period, nextDay, 0, remainder));
+};
+
 export const buildStopAllocation = (
   selectedTypes: StopType[],
   numberOfStops: number,
@@ -149,10 +225,6 @@ export const buildStopAllocation = (
   return allocation.slice(0, target);
 };
 
-/**
- * Orders the chosen stop types through the day so early, middle, and late slots
- * tend to match how people usually use those categories.
- */
 export const orderAllocation = (
   allocationTokens: StopType[],
   startTime: string,
@@ -186,10 +258,6 @@ export const orderAllocation = (
   return enforceCapsAndAdjacency(ordered);
 };
 
-/**
- * Prevents certain stop categories from appearing back-to-back when another
- * category is available later in the sequence.
- */
 export const enforceCapsAndAdjacency = (tokens: StopType[]): StopType[] => {
   if (tokens.length <= 1) return tokens;
 
@@ -222,7 +290,7 @@ interface SelectionContext {
   candidates: PlaceCandidate[];
   selected: PlaceCandidate[];
   input: WizardInput;
-  routing: RoutingProvider;
+  routing: unknown;
   selectionWindow?: number;
   qualityFloorOffset?: number;
 }
@@ -242,63 +310,50 @@ const estimateFallbackEtaMinutes = (
   return Math.max(1, Math.round((dist / estimatedSpeedKmh(transport)) * 60));
 };
 
-const buildLegCacheKey = (
-  from: { lat: number; lng: number },
-  to: { lat: number; lng: number },
-  transport: TransportType,
-) => `${transport}:${from.lat.toFixed(5)},${from.lng.toFixed(5)}->${to.lat.toFixed(5)},${to.lng.toFixed(5)}`;
-
-const routeEtaCache = new Map<string, number>();
-
-/**
- * Resolves travel time between two points. Routing results are cached by leg so
- * the selection step can reuse them while scoring candidate pools.
- */
-const getLegEtaMinutes = async (
-  from: { lat: number; lng: number },
-  to: { lat: number; lng: number },
-  transport: TransportType,
-  routing: RoutingProvider,
-) => {
-  const cacheKey = buildLegCacheKey(from, to, transport);
-  const cached = routeEtaCache.get(cacheKey);
-  if (typeof cached === 'number') return cached;
-
-  try {
-    const legs = await routing.route(
-      [
-        [from.lat, from.lng],
-        [to.lat, to.lng],
-      ],
-      transport,
-    );
-    const eta = legs[0]?.etaMin;
-    if (typeof eta === 'number' && Number.isFinite(eta)) {
-      routeEtaCache.set(cacheKey, eta);
-      return eta;
-    }
-  } catch {
-    // Fall back to straight-line travel estimates when routing is unavailable.
-  }
-
-  const fallback = estimateFallbackEtaMinutes(from, to, transport);
-  routeEtaCache.set(cacheKey, fallback);
-  return fallback;
-};
-
 interface RankedCandidate {
   candidate: PlaceCandidate;
   score: number;
-  estimatedEta?: number;
+  eta?: number;
 }
 
-/**
- * Scores candidates in two stages:
- * 1. cheap synchronous pre-ranking using estimated ETA
- * 2. exact routing only for the best few candidates
- *
- * This keeps results similar while avoiding route lookups for every candidate.
- */
+const computeBaseCandidateScore = (
+  candidate: PlaceCandidate,
+  token: StopType,
+  input: WizardInput,
+  explicitSelectedStopTypes: StopType[],
+): number | null => {
+  let score = 10;
+
+  score += candidate.stopType === token ? 8 : -12;
+  score += (candidate.rating || 0) * 1.5;
+  score += Math.min(3, (candidate.reviewCount || 0) / 500);
+
+  const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
+  const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
+  if (budgetScore <= -900) return null;
+  score += budgetScore;
+
+  score += getSoloSuitabilityScore(candidate, explicitSelectedStopTypes, input.groupType);
+
+  if (candidate.openNow) score += 2;
+
+  return score;
+};
+
+const applyTravelScore = (score: number, eta: number, input: WizardInput) => {
+  let next = score;
+
+  next += Math.max(0, 4 - eta / 8);
+
+  if (input.transport === 'walk') {
+    next += Math.max(0, 6 - eta / 4);
+  } else {
+    next += Math.max(0, 2 - eta / 15);
+  }
+
+  return next;
+};
+
 export const selectPlaceForToken = async ({
   token,
   tokenIndex,
@@ -306,7 +361,6 @@ export const selectPlaceForToken = async ({
   candidates,
   selected,
   input,
-  routing,
   selectionWindow = 12,
   qualityFloorOffset = 8,
 }: SelectionContext): Promise<PlaceCandidate | null> => {
@@ -322,106 +376,45 @@ export const selectPlaceForToken = async ({
       ? { lat: input.startLat as number, lng: input.startLng as number }
       : null;
 
-  const cheapRanked: RankedCandidate[] = [];
+  const ranked: RankedCandidate[] = [];
 
   for (const candidate of candidates) {
-    let score = 10;
+    const baseScore = computeBaseCandidateScore(candidate, token, input, explicitSelectedStopTypes);
+    if (baseScore == null) continue;
 
-    score += candidate.stopType === token ? 8 : -12;
-    score += (candidate.rating || 0) * 1.5;
-    score += Math.min(3, (candidate.reviewCount || 0) / 500);
-
-    const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
-    const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
-    if (budgetScore <= -900) continue;
-    score += budgetScore;
-    score += getSoloSuitabilityScore(candidate, explicitSelectedStopTypes, input.groupType);
-
-    if (candidate.openNow) score += 2;
-
-    let estimatedEta: number | undefined;
+    let score = baseScore;
+    let eta: number | undefined;
 
     if (from) {
-      estimatedEta = estimateFallbackEtaMinutes(from, { lat: candidate.lat, lng: candidate.lng }, input.transport);
+      eta = estimateFallbackEtaMinutes(from, { lat: candidate.lat, lng: candidate.lng }, input.transport);
 
-      // Slightly relaxed early cutoff so we do not over-prune before exact routing.
-      if (estimatedEta > maxTravel + 12) {
-        continue;
-      }
+      const hardLimit = Math.max(maxTravel + 20, Math.round(maxTravel * 1.75));
+      if (eta > hardLimit) continue;
 
-      score += Math.max(0, 4 - estimatedEta / 8);
+      score = applyTravelScore(score, eta, input);
 
-      if (input.transport === 'walk') {
-        score += Math.max(0, 6 - estimatedEta / 4);
-      } else {
-        score += Math.max(0, 2 - estimatedEta / 15);
+      if (eta > maxTravel) {
+        score -= Math.min(8, (eta - maxTravel) / 3);
       }
     }
 
-    cheapRanked.push({ candidate, score, estimatedEta });
+    ranked.push({
+      candidate,
+      score,
+      eta,
+    });
   }
 
-  if (cheapRanked.length === 0) return null;
+  if (ranked.length === 0) return null;
 
-  cheapRanked.sort((a, b) => b.score - a.score);
+  ranked.sort((a, b) => b.score - a.score);
 
-  const routingPoolSize = Math.min(
-    cheapRanked.length,
-    Math.max(selectionWindow * 2, input.feelingLucky ? 20 : 14),
-  );
-
-  const preselected = cheapRanked.slice(0, routingPoolSize);
-
-  const exactRanked = await Promise.all(
-    preselected.map(async (entry) => {
-      const candidate = entry.candidate;
-      let score = 10;
-
-      score += candidate.stopType === token ? 8 : -12;
-      score += (candidate.rating || 0) * 1.5;
-      score += Math.min(3, (candidate.reviewCount || 0) / 500);
-
-      const placeTier = resolvePlaceTier(candidate.priceLevel, candidate.costLevel);
-      const budgetScore = budgetScoreAdjustment(placeTier, input.budget);
-      if (budgetScore <= -900) return { candidate, score: -999 };
-      score += budgetScore;
-      score += getSoloSuitabilityScore(candidate, explicitSelectedStopTypes, input.groupType);
-
-      if (candidate.openNow) score += 2;
-
-      if (from) {
-        const eta = await getLegEtaMinutes(from, { lat: candidate.lat, lng: candidate.lng }, input.transport, routing);
-
-        if (eta > maxTravel) {
-          return { candidate, score: -999 };
-        }
-
-        score += Math.max(0, 4 - eta / 8);
-
-        if (input.transport === 'walk') {
-          score += Math.max(0, 6 - eta / 4);
-        } else {
-          score += Math.max(0, 2 - eta / 15);
-        }
-      }
-
-      return { candidate, score };
-    }),
-  );
-
-  const viable = exactRanked.filter((entry) => entry.score > -900).sort((a, b) => b.score - a.score);
-
-  if (viable.length === 0) {
-    // As a fallback, return the best cheap-ranked candidate.
-    return cheapRanked[0]?.candidate || null;
-  }
-
-  const bestScore = viable[0].score;
-  const qualityPool = viable.filter((entry) => entry.score >= bestScore - qualityFloorOffset);
+  const bestScore = ranked[0].score;
+  const qualityPool = ranked.filter((entry) => entry.score >= bestScore - qualityFloorOffset);
   const windowedPool = qualityPool.slice(0, Math.min(selectionWindow, qualityPool.length));
 
   if (windowedPool.length === 0) {
-    return viable[0].candidate;
+    return ranked[0].candidate;
   }
 
   const pickIndex = deterministicIndex(`${seed}-${token}-${tokenIndex}`, windowedPool.length);
@@ -435,10 +428,6 @@ export interface ScheduledStop extends PlaceCandidate {
   travelMinutesFromPrev: number;
 }
 
-/**
- * Builds timed stops from ordered places and route legs. The time budget first
- * reserves travel, then distributes remaining minutes across stops by category.
- */
 export const scheduleItinerary = (
   orderedStops: PlaceCandidate[],
   input: WizardInput,

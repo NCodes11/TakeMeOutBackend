@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "app-wide-design-system": {
+      "targetKind": "new-ui",
+      "projectId": "27cedcc5-1ddf-4cc0-8661-a2fbdeacb391",
+      "activeDraftId": "0137feb1-edc9-4e86-a663-c703d85f31df",
+      "designSystemPath": ".superdesign/design-system.md",
+      "referenceIds": ["src-assets-images-tmo-logo.png"],
+      "brandAssets": {
+        "logo": {
+          "assetKey": "src-assets-images-tmo-logo.png",
+          "url": "https://vgbujcuwptvheqijyjbe.supabase.co/storage/v1/object/public/hmac-uploads/projects/27cedcc5-1ddf-4cc0-8661-a2fbdeacb391/brand-assets/src-assets-images-tmo-logo.png/tmo-logo.png",
+          "sourcePath": "src/assets/images/tmo-logo.png"
+        }
+      },
+      "contextFiles": [".superdesign/design-system.md"],
+      "fingerprints": {
+        ".superdesign/design-system.md": "18c6de0b6fad843376771f59166ce8a871f4fac1760a71b94dadc0099f3ef144"
+      },
+      "components": [],
+      "drafts": {
+        "0137feb1-edc9-4e86-a663-c703d85f31df": {
+          "title": "Plan Your Day — Approved iOS Direction",
+          "visualDirection": "Light violet-tinted four-view consumer itinerary UI based on takemeout-light.html, using the exact original Take Me Out logo",
+          "currentVersion": 4
+        }
+      },
+      "updatedAt": "2026-09-15T01:18:24Z"
+    }
+  }
+}

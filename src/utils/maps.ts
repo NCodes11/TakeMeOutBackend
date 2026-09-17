@@ -8,16 +8,18 @@ const isFiniteNumber = (value: unknown): value is number => typeof value === 'nu
 export const hasValidCoords = (coords?: Partial<LatLng> | null): coords is LatLng =>
   !!coords && isFiniteNumber(coords.lat) && isFiniteNumber(coords.lng);
 
-// Use explicit coordinate URLs to avoid Apple Maps falling back to broad geocode searches.
-export const buildAppleMapsDirectionsUrl = (origin: LatLng, destination: LatLng, mode: 'd' | 'w' = 'd') =>
-  `https://maps.apple.com/?saddr=${origin.lat},${origin.lng}&daddr=${destination.lat},${destination.lng}&dirflg=${mode}`;
-
-export const buildAppleMapsPinUrl = (destination: LatLng, name: string) =>
-  `https://maps.apple.com/?ll=${destination.lat},${destination.lng}&q=${encodeURIComponent(name)}`;
-
-export const buildGoogleMapsPinUrl = (destination: LatLng, name?: string) => {
-  const query = name?.trim()
-    ? `${destination.lat},${destination.lng} (${name.trim()})`
-    : `${destination.lat},${destination.lng}`;
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+export const buildGoogleMapsDirectionsUrl = (
+  origin: LatLng,
+  destination: LatLng,
+  mode: 'drive' | 'walk' = 'drive',
+) => {
+  const travelmode = mode === 'walk' ? 'walking' : 'driving';
+  return `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}&travelmode=${travelmode}`;
 };
+
+export const buildGoogleMapsPinUrl = (destination: LatLng) =>
+  `https://www.google.com/maps/search/?api=1&query=${destination.lat},${destination.lng}`;
+
+/** Apple Maps turn-by-turn deep link. `mode` uses Apple's dirflg values: 'd' = drive, 'w' = walk. */
+export const buildAppleMapsDirectionsUrl = (origin: LatLng, destination: LatLng, mode: 'd' | 'w' = 'd') =>
+  `http://maps.apple.com/?saddr=${origin.lat},${origin.lng}&daddr=${destination.lat},${destination.lng}&dirflg=${mode}`;

@@ -7,18 +7,56 @@ import {
   orderAllocation,
   selectPlaceForToken,
   scheduleItinerary,
-  ScheduledStop,
+  isPlaceOpenAt,
 } from './itineraryEngine';
 import { evaluateCategoryCandidate } from '@/providers/categoryPolicy';
 import { getExplicitSelectedStopTypes, getSoloSuitabilityScore } from './soloSuitability';
-import { resolveDisplayPriceTier } from '@/utils/priceTier';
+import { withResolvedPhoto, resolvePrimaryPhotoUrl } from '@/utils/stopMedia';
 
 const DEFAULT_STOP_TYPE: StopType = 'restaurant';
 const ensureStopType = (value: StopType | undefined | null): StopType => value ?? DEFAULT_STOP_TYPE;
 
+type OpeningPeriod = {
+  day: number;
+  openMinutes: number;
+  closeMinutes: number;
+};
+
+type PlaceCandidateWithHours = PlaceCandidate & {
+  openingPeriods?: OpeningPeriod[];
+  timezone?: string;
+};
+
+type StopWithHours = Stop & {
+  openingPeriods?: OpeningPeriod[];
+  timezone?: string;
+  tags?: string[];
+};
+
+const FEELING_LUCKY_FALLBACKS: Record<StopType, StopType[]> = {
+  coffee: ['dessert', 'restaurant'],
+  dessert: ['coffee', 'restaurant'],
+  restaurant: ['coffee', 'dessert', 'activity'],
+  bar: ['restaurant', 'activity', 'coffee'],
+  activity: ['attraction', 'arts', 'outdoors'],
+  attraction: ['activity', 'arts', 'outdoors'],
+  outdoors: ['activity', 'attraction'],
+  arts: ['activity', 'attraction', 'coffee'],
+  shopping: ['activity', 'coffee', 'dessert'],
+};
+
 const parseMinutes = (time: string) => {
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;
+};
+
+const formatMinutesToTime = (totalMinutes: number) => {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const hh = Math.floor(normalized / 60)
+    .toString()
+    .padStart(2, '0');
+  const mm = (normalized % 60).toString().padStart(2, '0');
+  return `${hh}:${mm}`;
 };
 
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -54,7 +92,19 @@ const capStopsForWindow = (windowMinutes: number, requested: number) => {
   return Math.max(1, Math.min(maxStops, requested));
 };
 
-const matchCandidateForStop = (stop: Stop, candidates: PlaceCandidate[]) => {
+export const resolvePlannableStopCount = (
+  startTime: string,
+  endTime: string,
+  requested: number,
+) => {
+  const totalMinutes = parseMinutes(endTime) - parseMinutes(startTime);
+  if (totalMinutes <= 0) return 0;
+
+  const rawRequested = Math.max(1, Math.min(8, Math.floor(requested || 3)));
+  return capStopsForWindow(totalMinutes, rawRequested);
+};
+
+const matchCandidateForStop = (stop: Stop, candidates: PlaceCandidateWithHours[]) => {
   if (stop.providerId) {
     const byProvider = candidates.find((c) => c.providerId && c.providerId === stop.providerId);
     if (byProvider) return byProvider;
@@ -67,9 +117,10 @@ const matchCandidateForStop = (stop: Stop, candidates: PlaceCandidate[]) => {
   return byCoords || null;
 };
 
-const toPlaceCandidateFromStop = (stop: Stop): PlaceCandidate => {
+const toPlaceCandidateFromStop = (stop: Stop): PlaceCandidateWithHours => {
   const candidateId = stop.providerId || stop.id || `${stop.name}-${stop.lat}-${stop.lng}`;
-  const stopWithTags = stop as Stop & { tags?: string[] };
+  const stopWithHours = stop as StopWithHours;
+
   return {
     id: candidateId,
     providerId: stop.providerId,
@@ -83,12 +134,14 @@ const toPlaceCandidateFromStop = (stop: Stop): PlaceCandidate => {
     rating: stop.rating,
     reviewCount: stop.reviewCount,
     openingHoursText: stop.openingHoursText,
+    openingPeriods: Array.isArray(stopWithHours.openingPeriods) ? stopWithHours.openingPeriods : [],
+    timezone: stopWithHours.timezone,
     priceLevel: stop.priceLevel,
-    tags: Array.isArray(stopWithTags.tags) ? stopWithTags.tags : [],
+    tags: Array.isArray(stopWithHours.tags) ? stopWithHours.tags : [],
     photoUrl: stop.photoUrl,
     photos: stop.photos || [],
     stopType: ensureStopType(stop.stopType),
-  } as PlaceCandidate;
+  };
 };
 
 const normalizeStopTypes = (types: StopType[]) => Array.from(new Set(types));
@@ -139,14 +192,14 @@ const pickLuckySubset = (
   }
 
   const shuffled = deterministicShuffle(filtered, seed);
-  const count = Math.max(3, Math.min(Math.max(desiredCount + 1, 4), shuffled.length));
+  const count = Math.max(3, Math.min(Math.max(desiredCount, 3), shuffled.length));
 
   return uniqueStopTypes(shuffled.slice(0, count));
 };
 
 export const buildFeelingLuckyStopTypes = (input: WizardInput): StopType[] => {
   const base = luckyBaseMixByGroup(input.groupType);
-  const desiredCount = Math.max(3, Math.min(6, Math.floor(input.stopCount || 3) + 1));
+  const desiredCount = Math.max(3, Math.min(5, Math.floor(input.stopCount || 3)));
 
   return pickLuckySubset(
     base,
@@ -403,8 +456,191 @@ const buildOriginLeg = async (
 };
 
 const trimPool = (pool: PlaceCandidate[], input: WizardInput) => {
-  const max = input.feelingLucky ? 24 : 14;
+  const max = input.feelingLucky ? 60 : 40;
   return pool.slice(0, Math.min(pool.length, max));
+};
+
+const estimateStopDurationMinutes = (token: StopType) => {
+  switch (token) {
+    case 'coffee':
+      return 35;
+    case 'dessert':
+      return 30;
+    case 'bar':
+      return 60;
+    case 'restaurant':
+      return 75;
+    case 'shopping':
+      return 50;
+    case 'arts':
+    case 'activity':
+    case 'attraction':
+    case 'outdoors':
+      return 60;
+    default:
+      return 50;
+  }
+};
+
+const estimateTokenStartTime = (
+  input: WizardInput,
+  tokenIndex: number,
+  selectedSoFar: PlaceCandidateWithHours[],
+) => {
+  let total = parseMinutes(input.startTime);
+
+  for (let i = 0; i < tokenIndex; i += 1) {
+    const prior = selectedSoFar[i];
+    const priorType = ensureStopType(prior?.stopType);
+    total += estimateStopDurationMinutes(priorType);
+
+    const fallbackTravel = Math.max(8, Math.round((input.preferences.maxTravelMinutes || 30) * 0.45));
+    total += fallbackTravel;
+  }
+
+  return formatMinutesToTime(total);
+};
+
+const passesCategoryPolicy = (token: StopType, c: PlaceCandidate) => {
+  const check = evaluateCategoryCandidate(token, {
+    name: c.name,
+    address: c.address,
+    types: c.tags,
+  });
+  return check.accepted;
+};
+
+const buildFeelingLuckyPool = (
+  token: StopType,
+  byType: Map<StopType, PlaceCandidateWithHours[]>,
+  input: WizardInput,
+  isBlocked: (candidate: PlaceCandidateWithHours) => boolean,
+) => {
+  const primary = (byType.get(token) || [])
+    .filter((c) => !isBlocked(c))
+    .sort(preferInputAwareSort(input, token));
+
+  const fallbackTypes = FEELING_LUCKY_FALLBACKS[token] || [];
+
+  const secondary = fallbackTypes.flatMap((fallbackType) =>
+    (byType.get(fallbackType) || [])
+      .filter((c) => !isBlocked(c))
+      .map((c) => ({
+        ...c,
+        stopType: ensureStopType(c.stopType),
+      })),
+  );
+
+  const merged = [...primary, ...secondary];
+  const deduped: PlaceCandidateWithHours[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of merged) {
+    const key =
+      candidate.providerId ||
+      candidate.id ||
+      `${candidate.name}|${candidate.lat.toFixed(5)}|${candidate.lng.toFixed(5)}`;
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(candidate);
+  }
+
+  return deduped;
+};
+
+const recomputeScheduledStops = async (
+  input: WizardInput,
+  selected: PlaceCandidateWithHours[],
+  routing: RoutingProvider,
+) => {
+  const coords = selected.map((s) => [s.lat, s.lng] as [number, number]);
+  const routeLegs = coords.length > 1 ? await routing.route(coords, input.transport) : [];
+  const originLeg = await buildOriginLeg(routing, input, selected);
+
+  const scheduled = scheduleItinerary(selected, input, input.startTime, input.endTime, routeLegs, originLeg);
+  return { scheduled, routeLegs, originLeg };
+};
+
+const revalidateScheduledPlaces = async (params: {
+  input: WizardInput;
+  selected: PlaceCandidateWithHours[];
+  byType: Map<StopType, PlaceCandidateWithHours[]>;
+  routing: RoutingProvider;
+}) => {
+  const { input, selected, byType, routing } = params;
+
+  const working = [...selected];
+  let changed = false;
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    const { scheduled } = await recomputeScheduledStops(input, working, routing);
+    let passChanged = false;
+
+    for (let index = 0; index < scheduled.length; index += 1) {
+      const current = working[index];
+      const scheduledStop = scheduled[index];
+      const tokenType = ensureStopType(current.stopType);
+
+      if (isPlaceOpenAt(current, input.date, scheduledStop.startTime, scheduledStop.durationMinutes)) {
+        continue;
+      }
+
+      const usedIdKeys = new Set<string>();
+      const usedProviderKeys = new Set<string>();
+      const usedCoordKeys = new Set<string>();
+      const usedBrandKeys = new Set<string>();
+
+      working.forEach((p, i) => {
+        if (i === index) return;
+        const k = buildDedupeKeys(p);
+        if (k.idKey) usedIdKeys.add(k.idKey);
+        if (k.pidKey) usedProviderKeys.add(k.pidKey);
+        if (k.coordKey) usedCoordKeys.add(k.coordKey);
+        if (k.brandKey) usedBrandKeys.add(k.brandKey);
+      });
+
+      const currentKeys = buildDedupeKeys(current);
+
+      const replacementPool = trimPool(
+        (byType.get(tokenType) || [])
+          .filter((c) => {
+            const k = buildDedupeKeys(c);
+            if (k.idKey && k.idKey === currentKeys.idKey) return false;
+            if (k.pidKey && k.pidKey === currentKeys.pidKey) return false;
+            if (k.coordKey && k.coordKey === currentKeys.coordKey) return false;
+
+            if (k.idKey && usedIdKeys.has(k.idKey)) return false;
+            if (k.pidKey && usedProviderKeys.has(k.pidKey)) return false;
+            if (k.coordKey && usedCoordKeys.has(k.coordKey)) return false;
+            if (k.brandKey && usedBrandKeys.has(k.brandKey)) return false;
+
+            if (working.some((p, i) => i !== index && isLikelyDuplicateBrand(p.name, c.name))) return false;
+            if (!passesCategoryPolicy(tokenType, c)) return false;
+
+            const hasKnownHours = Array.isArray(c.openingPeriods) && c.openingPeriods.length > 0;
+            if (hasKnownHours && !isPlaceOpenAt(c, input.date, scheduledStop.startTime, scheduledStop.durationMinutes)) {
+              return false;
+            }
+
+            return true;
+          })
+          .sort(preferInputAwareSort(input, tokenType)),
+        input,
+      );
+
+      if (replacementPool.length > 0) {
+        working[index] = { ...replacementPool[0], stopType: ensureStopType(replacementPool[0].stopType) };
+        passChanged = true;
+        changed = true;
+      }
+    }
+
+    if (!passChanged) break;
+  }
+
+  const recomputed = await recomputeScheduledStops(input, working, routing);
+  return { selected: working, changed, ...recomputed };
 };
 
 export const generateStops = async (
@@ -415,17 +651,27 @@ export const generateStops = async (
 ): Promise<Stop[]> => {
   const selectedStopTypes = resolveSelectedStopTypes(input);
 
-  const validCandidates = candidates
+  const validCandidates: PlaceCandidateWithHours[] = candidates
     .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && (p.lat !== 0 || p.lng !== 0))
-    .map((c) => ({ ...c, stopType: ensureStopType(c.stopType) }));
+    .map((c) => {
+      const withHours = c as PlaceCandidateWithHours;
+      return {
+        ...withHours,
+        openingPeriods: Array.isArray(withHours.openingPeriods) ? withHours.openingPeriods : [],
+        stopType: ensureStopType(withHours.stopType),
+      };
+    });
 
   if (selectedStopTypes.length === 0) throw new Error('Select at least one stop type to generate a plan.');
 
   const totalMinutes = parseMinutes(input.endTime) - parseMinutes(input.startTime);
   if (totalMinutes <= 0) throw new Error('End time must be after start time.');
 
-  const rawRequested = Math.max(1, Math.min(8, Math.floor(input.stopCount || 3)));
-  const requestedCount = capStopsForWindow(totalMinutes, rawRequested);
+  const requestedCount = resolvePlannableStopCount(
+    input.startTime,
+    input.endTime,
+    input.stopCount || 3,
+  );
 
   const allocation = buildStopAllocation(selectedStopTypes, requestedCount, input.groupType);
   let orderedTokens = enforceCapsAndAdjacency(
@@ -433,7 +679,7 @@ export const generateStops = async (
   );
   orderedTokens = enforceRestaurantCap(orderedTokens, selectedStopTypes, input.groupType);
 
-  const byType = new Map<StopType, PlaceCandidate[]>();
+  const byType = new Map<StopType, PlaceCandidateWithHours[]>();
   for (const candidate of validCandidates) {
     const t = ensureStopType(candidate.stopType);
     const list = byType.get(t) || [];
@@ -441,7 +687,7 @@ export const generateStops = async (
     byType.set(t, list);
   }
 
-  const selected: PlaceCandidate[] = [];
+  const selected: PlaceCandidateWithHours[] = [];
   const selectedTokens: StopType[] = [];
 
   const usedIdKeys = new Set<string>();
@@ -449,7 +695,7 @@ export const generateStops = async (
   const usedCoordKeys = new Set<string>();
   const usedBrandKeys = new Set<string>();
 
-  const isBlocked = (candidate: PlaceCandidate) => {
+  const isBlocked = (candidate: PlaceCandidateWithHours) => {
     const keys = buildDedupeKeys(candidate);
     if (keys.idKey && usedIdKeys.has(keys.idKey)) return true;
     if (keys.pidKey && usedProviderKeys.has(keys.pidKey)) return true;
@@ -459,7 +705,7 @@ export const generateStops = async (
     return false;
   };
 
-  const markUsed = (candidate: PlaceCandidate) => {
+  const markUsed = (candidate: PlaceCandidateWithHours) => {
     const keys = buildDedupeKeys(candidate);
     if (keys.idKey) usedIdKeys.add(keys.idKey);
     if (keys.pidKey) usedProviderKeys.add(keys.pidKey);
@@ -469,35 +715,62 @@ export const generateStops = async (
 
   for (let tokenIndex = 0; tokenIndex < orderedTokens.length; tokenIndex += 1) {
     const token = orderedTokens[tokenIndex];
+    const estimatedStartTime = estimateTokenStartTime(input, tokenIndex, selected);
+    const estimatedDuration = estimateStopDurationMinutes(token);
 
-    const typedPool = (byType.get(token) || [])
-      .filter((c) => !isBlocked(c))
-      .sort(preferInputAwareSort(input, token));
+    const basePool = input.feelingLucky
+      ? buildFeelingLuckyPool(token, byType, input, isBlocked)
+      : (byType.get(token) || [])
+          .filter((c) => !isBlocked(c))
+          .sort(preferInputAwareSort(input, token));
 
-    const acceptedPool = typedPool.filter((c) => {
-      const check = evaluateCategoryCandidate(token, {
-        name: c.name,
-        address: c.address,
-        types: c.tags,
-      });
-      return check.accepted;
+    const acceptedPool = basePool.filter((c) => passesCategoryPolicy(token, c));
+    const candidatePool = trimPool(acceptedPool.length ? acceptedPool : basePool, input);
+
+    const verifiedOpenCandidatePool = candidatePool.filter((c) => {
+      const hasKnownHours = Array.isArray(c.openingPeriods) && c.openingPeriods.length > 0;
+      return hasKnownHours && isPlaceOpenAt(c, input.date, estimatedStartTime, estimatedDuration);
     });
 
-    const candidatePool = trimPool(acceptedPool.length ? acceptedPool : typedPool, input);
+    const unknownHoursCandidatePool = candidatePool.filter((c) => {
+      const hasKnownHours = Array.isArray(c.openingPeriods) && c.openingPeriods.length > 0;
+      return !hasKnownHours;
+    });
 
-    const fallbackPool = trimPool(
-      (byType.get(token) || [])
-        .filter((c) => !isBlocked(c))
-        .sort(preferInputAwareSort(input, token)),
-      input,
-    );
+    const effectiveCandidatePool =
+      verifiedOpenCandidatePool.length >= 3
+        ? [...verifiedOpenCandidatePool, ...unknownHoursCandidatePool].slice(0, candidatePool.length)
+        : candidatePool;
+
+    const fallbackBasePool = input.feelingLucky
+      ? buildFeelingLuckyPool(token, byType, input, isBlocked)
+      : (byType.get(token) || [])
+          .filter((c) => !isBlocked(c))
+          .sort(preferInputAwareSort(input, token));
+
+    const fallbackPool = trimPool(fallbackBasePool, input);
+
+    const verifiedOpenFallbackPool = fallbackPool.filter((c) => {
+      const hasKnownHours = Array.isArray(c.openingPeriods) && c.openingPeriods.length > 0;
+      return hasKnownHours && isPlaceOpenAt(c, input.date, estimatedStartTime, estimatedDuration);
+    });
+
+    const unknownHoursFallbackPool = fallbackPool.filter((c) => {
+      const hasKnownHours = Array.isArray(c.openingPeriods) && c.openingPeriods.length > 0;
+      return !hasKnownHours;
+    });
+
+    const effectiveFallbackPool =
+      verifiedOpenFallbackPool.length >= 3
+        ? [...verifiedOpenFallbackPool, ...unknownHoursFallbackPool].slice(0, fallbackPool.length)
+        : fallbackPool;
 
     const picked =
       (await selectPlaceForToken({
         token,
         tokenIndex,
         seed: `${planId}-generate`,
-        candidates: candidatePool,
+        candidates: effectiveCandidatePool,
         selected,
         input,
         routing,
@@ -508,7 +781,7 @@ export const generateStops = async (
         token,
         tokenIndex,
         seed: `${planId}-fallback`,
-        candidates: fallbackPool,
+        candidates: effectiveFallbackPool,
         selected,
         input,
         routing,
@@ -517,8 +790,15 @@ export const generateStops = async (
       }));
 
     if (picked) {
-      markUsed(picked);
-      selected.push({ ...picked, stopType: ensureStopType(picked.stopType) });
+      const normalizedPicked: PlaceCandidateWithHours = {
+        ...(picked as PlaceCandidateWithHours),
+        openingPeriods: Array.isArray((picked as PlaceCandidateWithHours).openingPeriods)
+          ? (picked as PlaceCandidateWithHours).openingPeriods
+          : [],
+        stopType: ensureStopType(picked.stopType),
+      };
+      markUsed(normalizedPicked);
+      selected.push(normalizedPicked);
       selectedTokens.push(token);
     }
   }
@@ -549,12 +829,7 @@ export const generateStops = async (
           if (k.coordKey && usedCoordKeys.has(k.coordKey) && k.coordKey !== currentKeys.coordKey) return false;
           if (k.brandKey && usedBrandKeys.has(k.brandKey) && k.brandKey !== currentKeys.brandKey) return false;
 
-          const check = evaluateCategoryCandidate(tokenType, {
-            name: c.name,
-            address: c.address,
-            types: c.tags,
-          });
-          return check.accepted;
+          return passesCategoryPolicy(tokenType, c);
         })
         .sort(preferInputAwareSort(input, tokenType)),
       input,
@@ -573,30 +848,44 @@ export const generateStops = async (
     });
 
     if (replacement) {
-      selected[index] = { ...replacement, stopType: ensureStopType(replacement.stopType) };
-      markUsed(replacement);
+      const normalizedReplacement: PlaceCandidateWithHours = {
+        ...(replacement as PlaceCandidateWithHours),
+        openingPeriods: Array.isArray((replacement as PlaceCandidateWithHours).openingPeriods)
+          ? (replacement as PlaceCandidateWithHours).openingPeriods
+          : [],
+        stopType: ensureStopType(replacement.stopType),
+      };
+      selected[index] = normalizedReplacement;
+      markUsed(normalizedReplacement);
     }
   }
 
-  if (selected.length === 0) throw new Error('No real nearby places found. Try another location or interests.');
+  if (selected.length === 0) {
+    throw new Error('No real nearby places found. Try another location or interests.');
+  }
 
-  const coords = selected.map((s) => [s.lat, s.lng] as [number, number]);
-  const routeLegs = await routing.route(coords, input.transport);
-  const originLeg = await buildOriginLeg(routing, input, selected);
-
-  const scheduled: ScheduledStop[] = scheduleItinerary(
-    selected,
+  const revalidated = await revalidateScheduledPlaces({
     input,
-    input.startTime,
-    input.endTime,
-    routeLegs,
-    originLeg,
-  );
+    selected,
+    byType,
+    routing,
+  });
 
-  return scheduled.map((s, index) => {
-    const leg = index === 0 ? originLeg : routeLegs[index - 1];
+  const finalSelected = await Promise.all(
+    revalidated.selected.map(async (candidate) => {
+      if (resolvePrimaryPhotoUrl(candidate)) return candidate;
+      return withResolvedPhoto(candidate);
+    }),
+  );
+  const finalScheduled = revalidated.scheduled;
+  const finalRouteLegs = revalidated.routeLegs;
+  const finalOriginLeg = revalidated.originLeg;
+
+  return finalScheduled.map((s, index) => {
+    const leg = index === 0 ? finalOriginLeg : finalRouteLegs[index - 1];
     const travel = leg?.etaMin ?? 0;
     const distance = leg?.distanceKm ?? 0;
+    const candidate = finalSelected[index] as PlaceCandidateWithHours;
 
     return {
       id: createId(),
@@ -612,13 +901,15 @@ export const generateStops = async (
       endTime: s.endTime,
       durationMin: s.durationMinutes,
 
-      costLevel: resolveDisplayPriceTier(s.priceLevel, s.costLevel, input.budget),
+      costLevel: s.costLevel || input.budget,
       why: `Fits your ${input.groupType.toLowerCase()} day and ${input.preferences.interests[0] || 'general'} interests.`,
       locked: 0,
 
       openNow: s.openNow,
       rating: s.rating,
       openingHoursText: s.openingHoursText,
+      openingPeriods: candidate.openingPeriods || [],
+      timezone: candidate.timezone,
       priceLevel: s.priceLevel,
       providerId: s.providerId,
       reviewCount: s.reviewCount,
@@ -627,9 +918,9 @@ export const generateStops = async (
       etaMin: travel,
       distanceKm: distance,
 
-      photoUrl: s.photoUrl,
-      photos: s.photos || [],
-    };
+      photoUrl: candidate.photoUrl || s.photoUrl,
+      photos: candidate.photos || s.photos || [],
+    } as Stop;
   });
 };
 
@@ -646,14 +937,21 @@ export const rerollStop = async (params: {
 
   if (stopIndex < 0 || stopIndex >= currentStops.length) return currentStops;
 
-  const validCandidates = candidates
+  const validCandidates: PlaceCandidateWithHours[] = candidates
     .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && (p.lat !== 0 || p.lng !== 0))
-    .map((c) => ({ ...c, stopType: ensureStopType(c.stopType) }));
+    .map((c) => {
+      const withHours = c as PlaceCandidateWithHours;
+      return {
+        ...withHours,
+        openingPeriods: Array.isArray(withHours.openingPeriods) ? withHours.openingPeriods : [],
+        stopType: ensureStopType(withHours.stopType),
+      };
+    });
 
-  const targetStop = currentStops[stopIndex];
+  const targetStop = currentStops[stopIndex] as StopWithHours;
   const tokenType = ensureStopType(targetStop.stopType);
 
-  const orderedPlaces: PlaceCandidate[] = currentStops.map((s) => {
+  const orderedPlaces: PlaceCandidateWithHours[] = currentStops.map((s) => {
     const found = matchCandidateForStop(s, validCandidates);
     return found || toPlaceCandidateFromStop(s);
   });
@@ -675,7 +973,7 @@ export const rerollStop = async (params: {
   const currentPlace = orderedPlaces[stopIndex];
   const currentKeys = buildDedupeKeys(currentPlace);
 
-  const isBlocked = (c: PlaceCandidate) => {
+  const isBlocked = (c: PlaceCandidateWithHours) => {
     const k = buildDedupeKeys(c);
 
     if (k.idKey && k.idKey === currentKeys.idKey) return true;
@@ -692,71 +990,120 @@ export const rerollStop = async (params: {
     return false;
   };
 
-  const pool = trimPool(
-    validCandidates
-      .filter((c) => ensureStopType(c.stopType) === tokenType)
-      .filter((c) => !isBlocked(c))
-      .sort(preferInputAwareSort(input, tokenType)),
-    input,
-  );
+  const targetStartTime = targetStop.startTime || estimateTokenStartTime(input, stopIndex, orderedPlaces);
+  const targetDuration =
+    Number.isFinite(targetStop.durationMin) ? Number(targetStop.durationMin) : estimateStopDurationMinutes(tokenType);
 
-  if (pool.length === 0) return currentStops;
+  const broadPool = validCandidates
+    .filter((c) => ensureStopType(c.stopType) === tokenType)
+    .filter((c) => !isBlocked(c))
+    .sort(preferInputAwareSort(input, tokenType));
 
-  const acceptedPool = pool.filter((candidate) => {
-    const check = evaluateCategoryCandidate(tokenType, {
-      name: candidate.name,
-      address: candidate.address,
-      types: candidate.tags,
-    });
-    return check.accepted;
+  const categoryPool = broadPool.filter((candidate) => passesCategoryPolicy(tokenType, candidate));
+
+  const verifiedOpenPool = categoryPool.filter((candidate) => {
+    const hasKnownHours = Array.isArray(candidate.openingPeriods) && candidate.openingPeriods.length > 0;
+    return hasKnownHours && isPlaceOpenAt(candidate, input.date, targetStartTime, targetDuration);
   });
 
-  const finalPool = acceptedPool.length ? acceptedPool : pool;
+  const unknownHoursPool = categoryPool.filter((candidate) => {
+    const hasKnownHours = Array.isArray(candidate.openingPeriods) && candidate.openingPeriods.length > 0;
+    return !hasKnownHours;
+  });
 
-  const nonce = rerollNonce ?? Date.now();
-  const seedBase = `${planId}-reroll-${stopIndex}-${nonce}`;
+  const relaxedPool =
+    verifiedOpenPool.length >= 3
+      ? [...verifiedOpenPool, ...unknownHoursPool, ...categoryPool].slice(0, categoryPool.length)
+      : categoryPool.length > 0
+        ? categoryPool
+        : broadPool;
 
+  if (relaxedPool.length === 0) return currentStops;
+
+  const rerollPool = relaxedPool.slice(0, Math.min(relaxedPool.length, 80));
   const selectedPrefix = orderedPlaces.slice(0, stopIndex);
 
-  let replacement: PlaceCandidate | null = null;
-  for (let attempt = 0; attempt < 6 && !replacement; attempt += 1) {
-    replacement =
-      (await selectPlaceForToken({
-        token: tokenType,
-        tokenIndex: stopIndex + attempt,
-        seed: `${seedBase}-${attempt}`,
-        candidates: finalPool,
-        selected: selectedPrefix,
-        input,
-        routing,
-        selectionWindow: 14,
-        qualityFloorOffset: 10,
-      })) || null;
+  const scoredCandidates: Array<{ candidate: PlaceCandidateWithHours; score: number }> = [];
+
+  for (const candidate of rerollPool) {
+    const picked = await selectPlaceForToken({
+      token: tokenType,
+      tokenIndex: stopIndex,
+      seed: `${planId}-reroll-score-${String(rerollNonce ?? Date.now())}-${candidate.id}`,
+      candidates: [candidate],
+      selected: selectedPrefix,
+      input,
+      routing,
+      selectionWindow: 1,
+      qualityFloorOffset: 0,
+    });
+
+    if (picked) {
+      const scoreBase =
+        (typeof candidate.rating === 'number' ? candidate.rating : 0) * 10 +
+        (typeof candidate.reviewCount === 'number' ? Math.min(candidate.reviewCount / 50, 20) : 0);
+
+      scoredCandidates.push({
+        candidate,
+        score: scoreBase,
+      });
+    }
   }
+
+  if (scoredCandidates.length === 0) return currentStops;
+
+  scoredCandidates.sort((a, b) => b.score - a.score);
+
+  const topWindow = scoredCandidates.slice(0, Math.min(8, scoredCandidates.length));
+
+  const nonceString = String(rerollNonce ?? Date.now());
+  let hash = 0;
+  for (let i = 0; i < nonceString.length; i += 1) {
+    hash = (hash << 5) - hash + nonceString.charCodeAt(i);
+    hash |= 0;
+  }
+  const replacement = topWindow[Math.abs(hash) % topWindow.length]?.candidate;
 
   if (!replacement) return currentStops;
 
   const nextPlaces = [...orderedPlaces];
-  nextPlaces[stopIndex] = { ...replacement, stopType: ensureStopType(replacement.stopType) };
+  nextPlaces[stopIndex] = {
+    ...replacement,
+    openingPeriods: Array.isArray(replacement.openingPeriods) ? replacement.openingPeriods : [],
+    stopType: ensureStopType(replacement.stopType),
+  };
 
-  const coords = nextPlaces.map((s) => [s.lat, s.lng] as [number, number]);
-  const routeLegs = await routing.route(coords, input.transport);
-  const originLeg = await buildOriginLeg(routing, input, nextPlaces);
+  const byType = new Map<StopType, PlaceCandidateWithHours[]>();
+  for (const candidate of validCandidates) {
+    const t = ensureStopType(candidate.stopType);
+    const list = byType.get(t) || [];
+    list.push({ ...candidate, stopType: t });
+    byType.set(t, list);
+  }
 
-  const scheduled: ScheduledStop[] = scheduleItinerary(
-    nextPlaces,
+  const revalidated = await revalidateScheduledPlaces({
     input,
-    input.startTime,
-    input.endTime,
-    routeLegs,
-    originLeg,
-  );
+    selected: nextPlaces,
+    byType,
+    routing,
+  });
 
-  return scheduled.map((s, index) => {
-    const prevStop = currentStops[index];
-    const leg = index === 0 ? originLeg : routeLegs[index - 1];
+  const finalPlaces = await Promise.all(
+    revalidated.selected.map(async (candidate) => {
+      if (resolvePrimaryPhotoUrl(candidate)) return candidate;
+      return withResolvedPhoto(candidate);
+    }),
+  );
+  const finalScheduled = revalidated.scheduled;
+  const finalRouteLegs = revalidated.routeLegs;
+  const finalOriginLeg = revalidated.originLeg;
+
+  return finalScheduled.map((s, index) => {
+    const prevStop = currentStops[index] as StopWithHours | undefined;
+    const leg = index === 0 ? finalOriginLeg : finalRouteLegs[index - 1];
     const travel = leg?.etaMin ?? 0;
     const distance = leg?.distanceKm ?? 0;
+    const candidate = finalPlaces[index] as PlaceCandidateWithHours;
 
     return {
       id: prevStop?.id || createId(),
@@ -772,7 +1119,7 @@ export const rerollStop = async (params: {
       endTime: s.endTime,
       durationMin: s.durationMinutes,
 
-      costLevel: resolveDisplayPriceTier(s.priceLevel, s.costLevel, input.budget),
+      costLevel: s.costLevel || input.budget,
       why:
         prevStop?.why ||
         `Fits your ${input.groupType.toLowerCase()} day and ${input.preferences.interests[0] || 'general'} interests.`,
@@ -781,6 +1128,8 @@ export const rerollStop = async (params: {
       openNow: s.openNow,
       rating: s.rating,
       openingHoursText: s.openingHoursText,
+      openingPeriods: candidate.openingPeriods || [],
+      timezone: candidate.timezone,
       priceLevel: s.priceLevel,
       providerId: s.providerId,
       reviewCount: s.reviewCount,
@@ -789,8 +1138,8 @@ export const rerollStop = async (params: {
       etaMin: travel,
       distanceKm: distance,
 
-      photoUrl: s.photoUrl,
-      photos: s.photos || [],
-    };
+      photoUrl: candidate.photoUrl || s.photoUrl,
+      photos: candidate.photos || s.photos || [],
+    } as Stop;
   });
 };

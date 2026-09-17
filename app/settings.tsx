@@ -1,95 +1,90 @@
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { Alert } from 'react-native';
+import Constants from 'expo-constants';
 import { StyleSheet, View } from 'react-native';
-import { SegmentedButtons, Switch, Text, TextInput, useTheme } from 'react-native-paper';
-import { AppCard, AppScreen, SecondaryButton } from '@/components/ui';
-import { usePreferences } from '@/context/PreferencesContext';
-import { exportFeedbackJson } from '@/utils/share';
-import { requestNotificationPermissions } from '@/utils/notifications';
-import { spacing, ThemeMode } from '@/theme/appTheme';
+import {
+  AppScreen,
+  MonoLabel,
+  SectionLabel,
+  Segmented,
+  SwitchRow,
+  ValueRow,
+} from '@/components/ui';
+import { DistanceUnits, ThemeMode, usePreferences } from '@/context/PreferencesContext';
+import { spacing } from '@/theme/appTheme';
+
+const APPEARANCE_OPTIONS: readonly { value: ThemeMode; label: string }[] = [
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
+
+const UNIT_OPTIONS: readonly { value: DistanceUnits; label: string }[] = [
+  { value: 'miles', label: 'Miles' },
+  { value: 'km', label: 'km' },
+];
 
 export default function SettingsScreen() {
-  // These controls are currently UI-level preferences for beta UX tuning.
-  const theme = useTheme();
-  const { timeFormat, themeMode, setTimeFormat, setThemeMode } = usePreferences();
-  const [units, setUnits] = useState('miles');
-  const [weekStart, setWeekStart] = useState('monday');
-  const [quietHours, setQuietHours] = useState('22:00-07:00');
+  const { timeFormat, setTimeFormat, themeMode, setThemeMode, distanceUnits, setDistanceUnits } =
+    usePreferences();
+
+  const version = Constants.expoConfig?.version || '1.0.0';
+  const build =
+    Constants.expoConfig?.ios?.buildNumber ||
+    String(Constants.expoConfig?.android?.versionCode || '');
+
   return (
     <AppScreen title="Settings">
-      <AppCard>
-        <View style={styles.content}>
-          <Text variant="titleMedium" style={[styles.header, { color: theme.colors.onSurface }]}>Preferences</Text>
-          <View style={styles.fieldGroup}>
-            <Text variant="labelLarge" style={[styles.label, { color: theme.colors.onSurface }]}>
-              Appearance
-            </Text>
-            <SegmentedButtons
-              value={themeMode}
-              onValueChange={(value) => {
-                setThemeMode(value as ThemeMode).catch(() => undefined);
-              }}
-              buttons={[
-                { value: 'system', label: 'System' },
-                { value: 'light', label: 'Light' },
-                { value: 'dark', label: 'Dark' },
-              ]}
-            />
-          </View>
-          <View style={styles.row}>
-            <Text style={{ color: theme.colors.onSurface }}>Use 24-hour time</Text>
-            <Switch
-              value={timeFormat === '24h'}
-              onValueChange={(enabled) => {
-                setTimeFormat(enabled ? '24h' : '12h').catch(() => undefined);
-              }}
-            />
-          </View>
-          <SegmentedButtons value={units} onValueChange={setUnits} buttons={[{ value: 'miles', label: 'Miles' }, { value: 'km', label: 'KM' }]} />
-          <SegmentedButtons value={weekStart} onValueChange={setWeekStart} buttons={[{ value: 'monday', label: 'Mon' }, { value: 'sunday', label: 'Sun' }]} />
-          <TextInput label="Quiet hours" mode="outlined" value={quietHours} onChangeText={setQuietHours} />
-          <View style={styles.row}>
-            <Text style={{ color: theme.colors.onSurface }}>Notifications</Text>
-            <Switch value={true} onValueChange={() => requestNotificationPermissions()} />
-          </View>
-          <SecondaryButton onPress={() => router.push('/feature-request')}>Suggest a Feature</SecondaryButton>
-          <SecondaryButton
-            onPress={async () => {
-              try {
-                // Beta helper: one-tap export of locally captured feedback datasets.
-                await exportFeedbackJson();
-              } catch {
-                Alert.alert('Export failed', 'Unable to export feedback right now.');
-              }
-            }}
-          >
-            Export data (JSON)
-          </SecondaryButton>
-          <SecondaryButton>Import data (JSON)</SecondaryButton>
-        </View>
-      </AppCard>
+      <SectionLabel first>Display</SectionLabel>
+
+      <ValueRow label="Appearance">
+        <Segmented
+          options={APPEARANCE_OPTIONS}
+          value={themeMode}
+          onChange={(next) => {
+            setThemeMode(next).catch(() => undefined);
+          }}
+          style={styles.segment}
+        />
+      </ValueRow>
+
+      <SwitchRow
+        label="24-hour time"
+        value={timeFormat === '24h'}
+        onValueChange={(enabled) => {
+          setTimeFormat(enabled ? '24h' : '12h').catch(() => undefined);
+        }}
+        divider
+      />
+
+      <ValueRow label="Distance units" divider>
+        <Segmented
+          options={UNIT_OPTIONS}
+          value={distanceUnits}
+          onChange={(next) => {
+            setDistanceUnits(next).catch(() => undefined);
+          }}
+          style={styles.segment}
+        />
+      </ValueRow>
+
+      <SectionLabel>Feedback</SectionLabel>
+
+      <ValueRow label="Suggest a feature" onPress={() => router.push('/feature-request')} />
+
+      <View style={styles.footer}>
+        <MonoLabel>
+          Take Me Out · v{version}
+          {build ? ` (${build})` : ''}
+        </MonoLabel>
+      </View>
     </AppScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
-    gap: spacing.md,
-    padding: spacing.md,
+  segment: {
+    width: 176,
   },
-  header: {
-    fontWeight: '600',
-  },
-  fieldGroup: {
-    gap: spacing.sm,
-  },
-  label: {
-    fontWeight: '600',
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  footer: {
+    marginTop: spacing.xxl,
   },
 });

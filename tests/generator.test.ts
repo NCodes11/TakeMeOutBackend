@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFeelingLuckyStopTypes, generateStops } from '../src/services/generator';
+import { buildFeelingLuckyStopTypes, generateStops, resolvePlannableStopCount } from '../src/services/generator';
 import { PlaceCandidate } from '../src/types/models';
 
 const routing = {
@@ -189,5 +189,11 @@ describe('generator', () => {
     expect(stops.filter((stop) => stop.stopType === 'coffee').length).toBeGreaterThan(
       stops.filter((stop) => stop.stopType === 'bar').length,
     );
+  });
+
+  it('caps requested stops to what the time window can realistically support', () => {
+    expect(resolvePlannableStopCount('09:00', '10:00', 8)).toBe(2);
+    expect(resolvePlannableStopCount('09:00', '12:00', 8)).toBe(6);
+    expect(resolvePlannableStopCount('09:00', '18:00', 8)).toBe(8);
   });
 });

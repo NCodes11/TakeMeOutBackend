@@ -5,10 +5,13 @@
 expo-env.d.ts
 # macOS filesystem noise
 .DS_Store
+.idea/
 # local runtime folders
 .expo/
 .npm-cache/
 node_modules/
+ios/
+android/
 # local env secrets
 .env
 .env.local
@@ -16,4 +19,7 @@ node_modules/
 # backend runtime data
 backend/data/*.sqlite
 backend/data/*.sqlite-*
+.superdesign/tmp/
+# Local clone of the destination repository used during migration.
+TakeMeOutApp/
 # @end expo-cli

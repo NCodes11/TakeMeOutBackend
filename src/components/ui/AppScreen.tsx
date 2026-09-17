@@ -1,32 +1,98 @@
-import { ReactNode } from 'react';
-import { ScrollView, ScrollViewProps, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { ReactNode, useEffect, useRef } from 'react';
+import {
+  ScrollView,
+  ScrollViewProps,
+  StyleProp,
+  StyleSheet,
+  Text,
+  View,
+  ViewStyle,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Text, useTheme } from 'react-native-paper';
-import { spacing } from '@/theme/appTheme';
+import { fonts, spacing, useAppPalette } from '@/theme/appTheme';
 
 interface AppScreenProps {
   children: ReactNode;
+  /** Large title rendered in the scroll content (the compact title lives in the native header). */
   title?: string;
+  /** Small monospaced overline above the title, e.g. "READY ROUTE". */
+  eyebrow?: string;
   subtitle?: string;
+  action?: ReactNode;
   scroll?: boolean;
   style?: StyleProp<ViewStyle>;
   contentContainerStyle?: ScrollViewProps['contentContainerStyle'];
+  /** Extra bottom padding so content clears a CTA dock. */
+  dockSpace?: boolean;
+  /** Development capture helper for deterministic visual QA of long screens. */
+  initialScrollY?: number;
+  /** Safe-area edges; the native stack header already covers the top on most screens. */
+  edges?: ('top' | 'bottom' | 'left' | 'right')[];
 }
 
-export const AppScreen = ({ children, title, subtitle, scroll = true, style, contentContainerStyle }: AppScreenProps) => {
-  const theme = useTheme();
+export const AppScreen = ({
+  children,
+  title,
+  eyebrow,
+  subtitle,
+  action,
+  scroll = true,
+  style,
+  contentContainerStyle,
+  dockSpace = false,
+  initialScrollY,
+  edges = ['bottom', 'left', 'right'],
+}: AppScreenProps) => {
+  const p = useAppPalette();
+  const scrollRef = useRef<ScrollView | null>(null);
+
+  useEffect(() => {
+    if (!initialScrollY) return;
+    const id = setTimeout(
+      () => scrollRef.current?.scrollTo({ x: 0, y: initialScrollY, animated: false }),
+      0,
+    );
+    return () => clearTimeout(id);
+  }, [initialScrollY]);
+
+  const header =
+    title || eyebrow || subtitle ? (
+      <View style={styles.header}>
+        {eyebrow ? <Text style={[styles.eyebrow, { color: p.textLow }]}>{eyebrow}</Text> : null}
+        {title ? (
+          <View style={styles.titleRow}>
+            <Text style={[styles.title, { color: p.textHigh }]} accessibilityRole="header">
+              {title}
+            </Text>
+            {action}
+          </View>
+        ) : null}
+        {subtitle ? <Text style={[styles.subtitle, { color: p.textMid }]}>{subtitle}</Text> : null}
+      </View>
+    ) : null;
+
   const body = (
     <View style={[styles.content, style]}>
-      {title ? <Text variant="headlineSmall" style={[styles.title, { color: theme.colors.onSurface }]}>{title}</Text> : null}
-      {subtitle ? <Text variant="bodyMedium" style={[styles.subtitle, { color: theme.colors.onSurfaceVariant }]}>{subtitle}</Text> : null}
+      {header}
       {children}
     </View>
   );
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.colors.background }]}>
+    <SafeAreaView edges={edges} style={[styles.safeArea, { backgroundColor: p.canvas }]}>
       {scroll ? (
-        <ScrollView contentContainerStyle={[styles.scrollContent, contentContainerStyle]}>{body}</ScrollView>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={[
+            styles.scrollContent,
+            dockSpace && styles.dockSpace,
+            contentContainerStyle,
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {body}
+        </ScrollView>
       ) : (
         body
       )}
@@ -41,15 +107,43 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: spacing.xxl,
   },
+  dockSpace: {
+    paddingBottom: 132,
+  },
   content: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    gap: spacing.md,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+    paddingHorizontal: spacing.gutter,
+    paddingTop: spacing.sm,
+    flex: 1,
+  },
+  header: {
+    gap: 8,
+    marginBottom: spacing.xs,
+  },
+  eyebrow: {
+    fontFamily: fonts.monoSemi,
+    fontSize: 10.5,
+    letterSpacing: 1.6,
+    textTransform: 'uppercase',
   },
   title: {
-    fontWeight: '700',
+    flex: 1,
+    fontFamily: fonts.display,
+    fontSize: 32,
+    lineHeight: 36,
+    letterSpacing: -0.9,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   subtitle: {
-    marginTop: -spacing.xs,
+    fontFamily: fonts.body,
+    fontSize: 14.5,
+    lineHeight: 22,
   },
 });
