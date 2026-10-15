@@ -23,6 +23,7 @@ import { spacing, useAppPalette } from '@/theme/appTheme';
 import { buildGoogleMapsPinUrl, hasValidCoords } from '@/utils/maps';
 import { Plan, Stop, WizardInput } from '@/types/models';
 import { RouteLeg } from '@/providers/routingProvider';
+import { showEndOfTripInterstitial } from '@/services/admob';
 
 type ViewMode = 'map' | 'list';
 
@@ -428,9 +429,14 @@ export default function GeneratedPlanScreen() {
           plan={plan}
           stops={orderedStops}
           onDismiss={() => setFeedbackVisible(false)}
+          onRatingSelected={() => {
+            void showEndOfTripInterstitial(plan.id);
+          }}
           onSubmitted={() => {
             setFeedbackVisible(false);
-            router.push('/');
+            void showEndOfTripInterstitial(plan.id)
+              .catch(() => undefined)
+              .finally(() => router.push('/'));
           }}
         />
       </AppScreen>

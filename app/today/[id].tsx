@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { FeedbackModal } from '@/components/FeedbackModal';
@@ -22,6 +22,7 @@ import { buildAppleMapsDirectionsUrl, hasValidCoords, LatLng } from '@/utils/map
 import { openMapsOptions } from '@/utils/openMapsOptions';
 import { resolvePrimaryPhotoUrl } from '@/utils/stopMedia';
 import { formatTimeDisplay } from '@/utils/time';
+import { preloadEndOfTripInterstitial, showEndOfTripInterstitial } from '@/services/admob';
 import { Stop } from '@/types/models';
 
 const EMPTY_STOPS: Stop[] = [];
@@ -43,6 +44,10 @@ export default function TodayMode() {
   const current = orderedStops[Math.min(currentIndex, Math.max(orderedStops.length - 1, 0))];
   const previous = currentIndex > 0 ? orderedStops[currentIndex - 1] : undefined;
   const isLast = currentIndex >= orderedStops.length - 1;
+
+  useEffect(() => {
+    void preloadEndOfTripInterstitial();
+  }, []);
 
   const origin: LatLng | null =
     location.coords &&
@@ -237,9 +242,16 @@ export default function TodayMode() {
           plan={plan}
           stops={orderedStops}
           onDismiss={() => setFeedbackVisible(false)}
+          onRatingSelected={() => {
+            void showEndOfTripInterstitial(plan.id);
+          }}
           onSubmitted={() => {
             setFeedbackVisible(false);
-            router.push('/');
+            // If the first request was still loading when the rating was
+            // chosen, give it one final chance before returning home.
+            void showEndOfTripInterstitial(plan.id)
+              .catch(() => undefined)
+              .finally(() => router.push('/'));
           }}
         />
       </AppScreen>

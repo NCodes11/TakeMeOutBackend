@@ -6,6 +6,13 @@
   "bin": {
     "install": "./scripts/install.js"
   },
+  "expo": {
+    "autolinking": {
+      "android": {
+        "exclude": ["react-native-google-mobile-ads"]
+      }
+    }
+  },
   "scripts": {
     "postinstall": "chmod +x node_modules/.bin/expo || true",
     "start": "expo start",
@@ -36,6 +43,7 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
+    "react-native-google-mobile-ads": "^17.0.0",
     "react-native-maps": "1.20.1",
     "react-native-paper": "^5.12.5",
     "react-native-safe-area-context": "~5.6.0",

@@ -12,6 +12,7 @@ interface FeedbackModalProps {
   stops: Stop[];
   onDismiss: () => void;
   onSubmitted: () => void;
+  onRatingSelected?: () => void;
 }
 
 export const FeedbackModal = ({
@@ -20,6 +21,7 @@ export const FeedbackModal = ({
   stops,
   onDismiss,
   onSubmitted,
+  onRatingSelected,
 }: FeedbackModalProps) => {
   const p = useAppPalette();
 
@@ -138,6 +140,7 @@ export const FeedbackModal = ({
                   onPress={() => {
                     setThumbsUp(true);
                     animateChoice(true);
+                    onRatingSelected?.();
                   }}
                 />
                 <Choice
@@ -148,6 +151,7 @@ export const FeedbackModal = ({
                   onPress={() => {
                     setThumbsUp(false);
                     animateChoice(false);
+                    onRatingSelected?.();
                   }}
                 />
               </View>

@@ -24,6 +24,7 @@ import { LocationProvider } from '@/context/LocationContext';
 import { PreferencesProvider, usePreferences } from '@/context/PreferencesContext';
 import { darkTheme, fonts, getAppPalette, lightTheme, shadows } from '@/theme/appTheme';
 import { usePlanStore } from '@/store/usePlanStore';
+import { initializeMobileAds, preloadEndOfTripInterstitial } from '@/services/admob';
 
 function BackButton({
   color,
@@ -127,6 +128,10 @@ export default function RootLayout() {
     if (typeof boot !== 'function') return;
     boot();
   }, [boot]);
+
+  useEffect(() => {
+    void initializeMobileAds().then(preloadEndOfTripInterstitial);
+  }, []);
 
   if (!fontsLoaded) return null;
 
